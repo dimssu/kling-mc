@@ -1,8 +1,8 @@
 import { z } from "zod";
 
 const schema = z.object({
-  KLING_ACCESS_KEY: z.string().min(1, "KLING_ACCESS_KEY is required"),
-  KLING_SECRET_KEY: z.string().min(1, "KLING_SECRET_KEY is required"),
+  KLING_ACCESS_KEY: z.string().optional().default(""),
+  KLING_SECRET_KEY: z.string().optional().default(""),
   KLING_BASE_URL: z.string().url().default("https://api-singapore.klingai.com"),
   KLING_TOKEN_TTL_SECONDS: z.coerce.number().int().min(60).max(1800).default(1800),
   KLING_DEFAULT_MODEL: z.enum(["kling-v2-6", "kling-v3"]).default("kling-v2-6"),

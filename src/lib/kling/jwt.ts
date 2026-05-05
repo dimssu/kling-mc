@@ -7,6 +7,11 @@ export function getKlingToken(now = Math.floor(Date.now() / 1000)): string {
   if (cached && cached.expiresAt - now > 60) return cached.token;
 
   const env = getEnv();
+  if (!env.KLING_ACCESS_KEY || !env.KLING_SECRET_KEY) {
+    throw new Error(
+      "Missing KLING_ACCESS_KEY / KLING_SECRET_KEY. Set them in .env.local before running the worker.",
+    );
+  }
   const exp = now + env.KLING_TOKEN_TTL_SECONDS;
   const payload = {
     iss: env.KLING_ACCESS_KEY,

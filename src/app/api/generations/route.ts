@@ -5,7 +5,7 @@ import { logger } from "@/lib/logger";
 import { getMotionControlQueue } from "@/lib/queue";
 import { estimateCostUsd } from "@/lib/kling/pricing";
 import { createGenerationSchema, validateImageFile, validateVideoFile } from "@/lib/validation";
-import { Decimal } from "@prisma/client/runtime/library";
+import { Decimal } from "@/generated/prisma/runtime/library";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

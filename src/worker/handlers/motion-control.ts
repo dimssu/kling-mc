@@ -1,6 +1,6 @@
 import { extname } from "node:path";
 import type { Logger } from "pino";
-import { Decimal, type InputJsonValue } from "@prisma/client/runtime/library";
+import { Decimal, type InputJsonValue } from "@/generated/prisma/runtime/library";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { getKlingProvider } from "@/lib/kling";
