@@ -14,12 +14,22 @@ export async function GET(_req: Request, ctx: Ctx) {
   const { id } = await ctx.params;
   const imageGeneration = await prisma.imageGeneration.findUnique({
     where: { id },
-    include: { referenceImage: true, outputAsset: true },
+    include: { sceneImage: true, styleImage: true, outputAsset: true },
   });
   if (!imageGeneration || imageGeneration.ownerId !== env.DEFAULT_USER_ID) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
-  return NextResponse.json({ imageGeneration });
+  // subjectImageIds is a Postgres String[] with no FK, so resolve to assets
+  // here. Preserves the order the user picked.
+  const subjects = await prisma.mediaAsset.findMany({
+    where: { id: { in: imageGeneration.subjectImageIds } },
+  });
+  const byId = new Map(subjects.map((a) => [a.id, a]));
+  const subjectImages = imageGeneration.subjectImageIds
+    .map((sid) => byId.get(sid))
+    .filter((a): a is NonNullable<typeof a> => !!a);
+
+  return NextResponse.json({ imageGeneration: { ...imageGeneration, subjectImages } });
 }
 
 export async function DELETE(_req: Request, ctx: Ctx) {

@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import { getEnv } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { getImageGenerationQueue } from "@/lib/queue";
-import { estimateImageCostUsd } from "@/lib/kling/pricing";
+import { estimateImageCostUsd, type KlingImageModel } from "@/lib/kling/pricing";
 import { createImageGenerationSchema, validateImageFile } from "@/lib/validation";
 import { Decimal } from "@/generated/prisma/runtime/library";
 
@@ -30,7 +30,7 @@ export async function GET(req: Request) {
     orderBy: { createdAt: "desc" },
     take: limit + 1,
     ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
-    include: { referenceImage: true, outputAsset: true },
+    include: { sceneImage: true, styleImage: true, outputAsset: true },
   });
 
   const hasMore = items.length > limit;
@@ -52,32 +52,43 @@ export async function POST(req: Request) {
   const parsed = createImageGenerationSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json(
-      { error: "Validation failed", issues: parsed.error.issues },
+      { error: parsed.error.issues[0]?.message ?? "Validation failed", issues: parsed.error.issues },
       { status: 400 },
     );
   }
   const input = parsed.data;
 
-  const referenceImage = await prisma.mediaAsset.findUnique({ where: { id: input.referenceImageId } });
-  if (
-    !referenceImage ||
-    referenceImage.ownerId !== env.DEFAULT_USER_ID ||
-    referenceImage.kind !== "reference_image"
-  ) {
-    return NextResponse.json({ error: "referenceImageId not found" }, { status: 400 });
-  }
-
-  const imageCheck = validateImageFile({
-    mimeType: referenceImage.mimeType,
-    sizeBytes: referenceImage.sizeBytes,
-    width: referenceImage.width ?? undefined,
-    height: referenceImage.height ?? undefined,
+  // Resolve and validate every referenced asset in one round-trip.
+  const referencedIds = [
+    ...input.subjectImageIds,
+    ...(input.sceneImageId ? [input.sceneImageId] : []),
+    ...(input.styleImageId ? [input.styleImageId] : []),
+  ];
+  const assets = await prisma.mediaAsset.findMany({
+    where: { id: { in: referencedIds }, ownerId: env.DEFAULT_USER_ID },
   });
-  if (!imageCheck.ok) {
-    return NextResponse.json({ error: imageCheck.reason }, { status: 400 });
+  const byId = new Map(assets.map((a) => [a.id, a]));
+
+  for (const id of referencedIds) {
+    const a = byId.get(id);
+    if (!a || a.kind !== "reference_image") {
+      return NextResponse.json({ error: `referenceImage not found: ${id}` }, { status: 400 });
+    }
+    const check = validateImageFile({
+      mimeType: a.mimeType,
+      sizeBytes: a.sizeBytes,
+      width: a.width ?? undefined,
+      height: a.height ?? undefined,
+    });
+    if (!check.ok) {
+      return NextResponse.json(
+        { error: `${a.filename}: ${check.reason}` },
+        { status: 400 },
+      );
+    }
   }
 
-  const estimatedCost = estimateImageCostUsd(input.modelName);
+  const estimatedCost = estimateImageCostUsd(input.modelName as KlingImageModel, input.n);
   const externalTaskId = `kmc_img_${randomUUID().replace(/-/g, "")}`;
 
   const imageGeneration = await prisma.imageGeneration.create({
@@ -86,11 +97,14 @@ export async function POST(req: Request) {
       status: "queued",
       provider: "kling_official",
       externalTaskId,
-      referenceImageId: referenceImage.id,
+      subjectImageIds: input.subjectImageIds,
+      sceneImageId: input.sceneImageId,
+      styleImageId: input.styleImageId,
       prompt: input.prompt,
       negativePrompt: input.negativePrompt,
       modelName: input.modelName,
       aspectRatio: input.aspectRatio,
+      n: input.n,
       estimatedCostUsd: new Decimal(estimatedCost),
     },
   });
@@ -102,7 +116,7 @@ export async function POST(req: Request) {
     { jobId: imageGeneration.id },
   );
   logger.info(
-    { imageGenerationId: imageGeneration.id, externalTaskId },
+    { imageGenerationId: imageGeneration.id, externalTaskId, refs: referencedIds.length },
     "Image generation enqueued",
   );
 

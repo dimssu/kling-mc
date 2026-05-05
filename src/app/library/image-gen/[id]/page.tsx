@@ -105,10 +105,48 @@ export default function ImageGenerationDetailPage({ params }: Props) {
 
       <Card>
         <CardHeader>
-          <CardTitle>Reference image</CardTitle>
-          <CardDescription>{relativeTime(g.referenceImage?.createdAt)}</CardDescription>
+          <CardTitle>Reference images</CardTitle>
+          <CardDescription>
+            {(g.subjectImages?.length ?? 0)} subject
+            {(g.subjectImages?.length ?? 0) === 1 ? "" : "s"}
+            {g.sceneImage ? " · 1 scene" : ""}
+            {g.styleImage ? " · 1 style" : ""}
+          </CardDescription>
         </CardHeader>
-        <CardContent>{g.referenceImage && <MediaThumb asset={g.referenceImage} />}</CardContent>
+        <CardContent className="space-y-4">
+          {g.subjectImages && g.subjectImages.length > 0 && (
+            <div>
+              <p className="mb-2 text-xs uppercase tracking-wide text-[var(--color-fg-subtle)]">
+                Subjects
+              </p>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                {g.subjectImages.map((a) => (
+                  <MediaThumb key={a.id} asset={a} />
+                ))}
+              </div>
+            </div>
+          )}
+          {(g.sceneImage || g.styleImage) && (
+            <div className="grid gap-3 sm:grid-cols-2">
+              {g.sceneImage && (
+                <div>
+                  <p className="mb-2 text-xs uppercase tracking-wide text-[var(--color-fg-subtle)]">
+                    Scene
+                  </p>
+                  <MediaThumb asset={g.sceneImage} />
+                </div>
+              )}
+              {g.styleImage && (
+                <div>
+                  <p className="mb-2 text-xs uppercase tracking-wide text-[var(--color-fg-subtle)]">
+                    Style
+                  </p>
+                  <MediaThumb asset={g.styleImage} />
+                </div>
+              )}
+            </div>
+          )}
+        </CardContent>
       </Card>
 
       <Card>
@@ -117,6 +155,7 @@ export default function ImageGenerationDetailPage({ params }: Props) {
           <dl className="grid gap-3 sm:grid-cols-2">
             <Detail k="Model" v={g.modelName} />
             <Detail k="Aspect ratio" v={g.aspectRatio ?? "—"} />
+            <Detail k="Images requested" v={String(g.n ?? 1)} />
             <Detail k="Estimated cost" v={formatUsd(Number(g.estimatedCostUsd))} />
             <Detail k="Actual cost" v={g.actualCostUsd != null ? formatUsd(Number(g.actualCostUsd)) : "—"} />
             <Detail k="Final unit deduction" v={g.finalUnitDeduction ?? "—"} />

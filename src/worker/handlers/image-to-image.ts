@@ -22,7 +22,7 @@ export async function handleImageGenerationJob(imageGenerationId: string): Promi
   const log = logger.child({ imageGenerationId });
   const imageGen = await prisma.imageGeneration.findUniqueOrThrow({
     where: { id: imageGenerationId },
-    include: { referenceImage: true },
+    include: { sceneImage: true, styleImage: true },
   });
 
   if (imageGen.status === "completed" || imageGen.status === "failed") {
@@ -35,8 +35,31 @@ export async function handleImageGenerationJob(imageGenerationId: string): Promi
   let providerTaskId = imageGen.providerTaskId;
 
   if (!providerTaskId) {
-    const referenceUrl = getKlingFetchUrl(imageGen.referenceImage.storageKey);
-    log.info({ referenceUrl }, "Resolved fetch URL for Kling");
+    // Resolve subject MediaAssets in the order the user picked them.
+    const subjects = await prisma.mediaAsset.findMany({
+      where: { id: { in: imageGen.subjectImageIds } },
+    });
+    const byId = new Map(subjects.map((a) => [a.id, a]));
+    const subjectImageUrls: string[] = [];
+    for (const sid of imageGen.subjectImageIds) {
+      const a = byId.get(sid);
+      if (!a) {
+        await markFailed(imageGen.id, new Error(`Subject image ${sid} not found`));
+        return;
+      }
+      subjectImageUrls.push(getKlingFetchUrl(a.storageKey));
+    }
+    const sceneImageUrl = imageGen.sceneImage
+      ? getKlingFetchUrl(imageGen.sceneImage.storageKey)
+      : undefined;
+    const styleImageUrl = imageGen.styleImage
+      ? getKlingFetchUrl(imageGen.styleImage.storageKey)
+      : undefined;
+
+    log.info(
+      { subjectCount: subjectImageUrls.length, hasScene: !!sceneImageUrl, hasStyle: !!styleImageUrl },
+      "Resolved fetch URLs for Kling",
+    );
 
     const callbackUrl =
       env.ENABLE_KLING_WEBHOOKS && env.WEBHOOK_SECRET
@@ -47,15 +70,15 @@ export async function handleImageGenerationJob(imageGenerationId: string): Promi
     try {
       const result = await provider.createImageToImageTask({
         modelName: imageGen.modelName as KlingImageModel,
-        // v0 always sends a single subject image. Multi-subject + scene/style
-        // can be added once we add slots for them in the form + schema.
-        subjectImageUrls: [referenceUrl],
+        subjectImageUrls,
+        sceneImageUrl,
+        styleImageUrl,
         prompt: imageGen.prompt ?? undefined,
         negativePrompt: imageGen.negativePrompt ?? undefined,
         aspectRatio: (imageGen.aspectRatio ?? undefined) as
           | KlingImageAspectRatio
           | undefined,
-        n: 1,
+        n: imageGen.n,
         callbackUrl,
         externalTaskId: imageGen.externalTaskId,
       });
@@ -175,7 +198,7 @@ async function finalizeSuccess(
   const actualCostUsd = imageDeductionToUsd(
     imageGen.modelName as KlingImageModel,
     result.finalUnitDeduction,
-    1, // n=1 in v0
+    imageGen.n,
   );
 
   await prisma.$transaction(async (tx) => {

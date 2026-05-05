@@ -74,12 +74,15 @@ export type ImageGeneration = {
   provider: string;
   providerTaskId: string | null;
   externalTaskId: string;
-  referenceImageId: string;
+  subjectImageIds: string[];
+  sceneImageId: string | null;
+  styleImageId: string | null;
   outputAssetId: string | null;
   prompt: string | null;
   negativePrompt: string | null;
   modelName: string;
   aspectRatio: string | null;
+  n: number;
   estimatedCostUsd: string | number;
   actualCostUsd: string | number | null;
   finalUnitDeduction: string | null;
@@ -90,7 +93,10 @@ export type ImageGeneration = {
   updatedAt: string;
   submittedAt: string | null;
   completedAt: string | null;
-  referenceImage?: MediaAsset;
+  // Resolved on the GET-by-id endpoint:
+  subjectImages?: MediaAsset[];
+  sceneImage?: MediaAsset | null;
+  styleImage?: MediaAsset | null;
   outputAsset?: MediaAsset | null;
 };
 
@@ -148,7 +154,9 @@ export const api = {
       body: JSON.stringify({ value }),
     }),
   createImageGeneration: (input: {
-    referenceImageId: string;
+    subjectImageIds: string[];
+    sceneImageId?: string;
+    styleImageId?: string;
     prompt?: string;
     negativePrompt?: string;
     modelName: "kling-v2" | "kling-v2-1";

@@ -119,16 +119,27 @@ export const createGenerationSchema = z.object({
 
 export type CreateGenerationInput = z.infer<typeof createGenerationSchema>;
 
-export const createImageGenerationSchema = z.object({
-  referenceImageId: z.string().min(1),
-  prompt: z.string().max(2500).optional(),
-  negativePrompt: z.string().max(2500).optional(),
-  modelName: z.enum(["kling-v2", "kling-v2-1"]),
-  aspectRatio: z
-    .enum(["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "2:3", "21:9"])
-    .optional(),
-  // Number of generated images, 1..9. v0 ships with 1.
-  n: z.number().int().min(1).max(9).default(1),
-});
+export const createImageGenerationSchema = z
+  .object({
+    subjectImageIds: z.array(z.string().min(1)).min(1).max(4),
+    sceneImageId: z.string().min(1).optional(),
+    styleImageId: z.string().min(1).optional(),
+    prompt: z.string().max(2500).optional(),
+    negativePrompt: z.string().max(2500).optional(),
+    modelName: z.enum(["kling-v2", "kling-v2-1"]),
+    aspectRatio: z
+      .enum(["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "2:3", "21:9"])
+      .optional(),
+    // 1..9 generated images per task. v0 ships with 1.
+    n: z.number().int().min(1).max(9).default(1),
+  })
+  .refine(
+    (v) => v.subjectImageIds.length + (v.sceneImageId ? 1 : 0) + (v.styleImageId ? 1 : 0) >= 2,
+    {
+      message:
+        "Pick at least 2 reference images total across subjects, scene, and style.",
+      path: ["subjectImageIds"],
+    },
+  );
 
 export type CreateImageGenerationInput = z.infer<typeof createImageGenerationSchema>;

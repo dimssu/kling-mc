@@ -3,7 +3,7 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, Loader2 } from "lucide-react";
+import { ArrowRight, Loader2, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { api, type MediaAsset } from "@/lib/api-client";
 import { formatUsd } from "@/lib/utils";
@@ -27,24 +27,39 @@ const IMAGE_PRICING: Record<string, number> = {
 
 type AspectRatio = "16:9" | "9:16" | "1:1" | "4:3" | "3:4" | "3:2" | "2:3" | "21:9";
 
+const MAX_SUBJECTS = 4;
+
 export function CreateImageGenerationForm() {
   const router = useRouter();
   const qc = useQueryClient();
-  const [referenceImage, setReferenceImage] = React.useState<MediaAsset | null>(null);
+
+  // Subjects: ordered list, length 1..4. Initialise with one empty slot.
+  const [subjects, setSubjects] = React.useState<Array<MediaAsset | null>>([null]);
+  const [sceneImage, setSceneImage] = React.useState<MediaAsset | null>(null);
+  const [styleImage, setStyleImage] = React.useState<MediaAsset | null>(null);
+
   const [prompt, setPrompt] = React.useState("");
   const [negativePrompt, setNegativePrompt] = React.useState("");
   const [modelName, setModelName] = React.useState<"kling-v2" | "kling-v2-1">("kling-v2-1");
   const [aspectRatio, setAspectRatio] = React.useState<AspectRatio>("16:9");
+  const [n, setN] = React.useState(1);
+
+  const subjectsFilled = subjects.filter((s): s is MediaAsset => !!s);
+  const totalRefs =
+    subjectsFilled.length + (sceneImage ? 1 : 0) + (styleImage ? 1 : 0);
 
   const submit = useMutation({
     mutationFn: () => {
-      if (!referenceImage) throw new Error("Reference image is required");
+      if (totalRefs < 2) throw new Error("Pick at least 2 reference images total.");
       return api.createImageGeneration({
-        referenceImageId: referenceImage.id,
+        subjectImageIds: subjectsFilled.map((s) => s.id),
+        sceneImageId: sceneImage?.id,
+        styleImageId: styleImage?.id,
         prompt: prompt || undefined,
         negativePrompt: negativePrompt || undefined,
         modelName,
         aspectRatio,
+        n,
       });
     },
     onSuccess: ({ imageGeneration }) => {
@@ -56,32 +71,105 @@ export function CreateImageGenerationForm() {
     onError: (err: Error) => toast.error(err.message),
   });
 
-  const cost = IMAGE_PRICING[modelName] ?? 0;
-  const ready = !!referenceImage && !submit.isPending;
+  const ratePerImage = IMAGE_PRICING[modelName] ?? 0;
+  const cost = ratePerImage * n;
+  const ready = totalRefs >= 2 && !submit.isPending;
+
+  const setSubjectAt = (i: number, a: MediaAsset | null) => {
+    setSubjects((prev) => {
+      const next = [...prev];
+      next[i] = a;
+      // Trim trailing empty slots, keeping at least one.
+      while (next.length > 1 && next[next.length - 1] === null) next.pop();
+      return next;
+    });
+  };
+
+  const addSubjectSlot = () => {
+    if (subjects.length >= MAX_SUBJECTS) return;
+    setSubjects((prev) => [...prev, null]);
+  };
 
   return (
     <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
       <div className="space-y-5">
         <Card>
           <CardHeader>
-            <CardTitle>1 · Reference image</CardTitle>
-            <CardDescription>The visual starting point. JPG/PNG, ≤ 10 MB.</CardDescription>
+            <CardTitle>1 · Subject images</CardTitle>
+            <CardDescription>
+              Up to 4 images of your subject(s). Pre-crop them; the API doesn&apos;t crop.
+              JPG/PNG, ≤ 10 MB each.
+            </CardDescription>
           </CardHeader>
-          <CardContent>
-            <AssetSlot
-              kind="reference_image"
-              accept="image/png,image/jpeg"
-              asset={referenceImage}
-              onPick={setReferenceImage}
-            />
+          <CardContent className="space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              {subjects.map((s, i) => (
+                <div key={i} className="space-y-1">
+                  <Label className="text-xs text-[var(--color-fg-muted)]">
+                    Subject {i + 1}
+                  </Label>
+                  <AssetSlot
+                    kind="reference_image"
+                    accept="image/png,image/jpeg"
+                    asset={s}
+                    onPick={(a) => setSubjectAt(i, a)}
+                  />
+                </div>
+              ))}
+            </div>
+            {subjects.length < MAX_SUBJECTS && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={addSubjectSlot}
+                className="w-full"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Add another subject ({subjects.length}/{MAX_SUBJECTS})
+              </Button>
+            )}
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
-            <CardTitle>2 · Prompt</CardTitle>
+            <CardTitle>2 · Scene & style (optional)</CardTitle>
             <CardDescription>
-              Describe what you want. The reference image guides the composition; the prompt tunes the result.
+              Kling needs <strong>at least 2 reference images total</strong> across
+              subjects, scene, and style. Add a scene or style image here, or a
+              second subject above.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1">
+              <Label className="text-xs text-[var(--color-fg-muted)]">Scene image</Label>
+              <AssetSlot
+                kind="reference_image"
+                accept="image/png,image/jpeg"
+                asset={sceneImage}
+                onPick={setSceneImage}
+                emptyHint="Optional · sets background / environment"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs text-[var(--color-fg-muted)]">Style image</Label>
+              <AssetSlot
+                kind="reference_image"
+                accept="image/png,image/jpeg"
+                asset={styleImage}
+                onPick={setStyleImage}
+                emptyHint="Optional · sets aesthetic / look"
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>3 · Prompt</CardTitle>
+            <CardDescription>
+              Describe what you want. The reference images guide composition; the prompt tunes the result.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -91,7 +179,7 @@ export function CreateImageGenerationForm() {
                 id="prompt"
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
-                placeholder="e.g. Studio portrait, dramatic side lighting, 50mm lens, shallow depth of field"
+                placeholder="e.g. Wearing a flowing red dress on the grassland, in Ghibli style."
                 maxLength={2500}
                 rows={3}
               />
@@ -113,9 +201,9 @@ export function CreateImageGenerationForm() {
 
         <Card>
           <CardHeader>
-            <CardTitle>3 · Options</CardTitle>
+            <CardTitle>4 · Options</CardTitle>
           </CardHeader>
-          <CardContent className="grid gap-4 sm:grid-cols-2">
+          <CardContent className="grid gap-4 sm:grid-cols-3">
             <div className="space-y-1.5">
               <Label htmlFor="model">Model</Label>
               <Select value={modelName} onValueChange={(v) => setModelName(v as typeof modelName)}>
@@ -142,6 +230,17 @@ export function CreateImageGenerationForm() {
                 </SelectContent>
               </Select>
             </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="n">Number of images</Label>
+              <Select value={String(n)} onValueChange={(v) => setN(Number(v))}>
+                <SelectTrigger id="n"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((k) => (
+                    <SelectItem key={k} value={String(k)}>{k}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -150,7 +249,9 @@ export function CreateImageGenerationForm() {
         <Card>
           <CardHeader>
             <CardTitle>Estimated cost</CardTitle>
-            <CardDescription>Per generated image at the {modelName} rate.</CardDescription>
+            <CardDescription>
+              {n} {n === 1 ? "image" : "images"} × {formatUsd(ratePerImage)} per image
+            </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="flex items-baseline gap-2">
@@ -159,6 +260,16 @@ export function CreateImageGenerationForm() {
               </span>
               <span className="text-xs text-[var(--color-fg-subtle)]">est.</span>
             </div>
+            <dl className="space-y-1.5 text-sm">
+              <Row k="References" v={`${totalRefs} total`} />
+              <Row k="Model" v={modelName} />
+              <Row k="Aspect" v={aspectRatio} />
+            </dl>
+            {totalRefs < 2 && (
+              <p className="rounded-[var(--radius-md)] border border-[var(--color-warning)] bg-[color-mix(in_oklab,var(--color-warning)_15%,transparent)] px-3 py-2 text-xs text-[var(--color-warning)]">
+                Need at least 2 reference images total (subject + scene/style or two subjects).
+              </p>
+            )}
             <Button
               type="button"
               size="lg"
@@ -167,7 +278,7 @@ export function CreateImageGenerationForm() {
               onClick={() => submit.mutate()}
             >
               {submit.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
-              {submit.isPending ? "Submitting…" : "Generate image"}
+              {submit.isPending ? "Submitting…" : `Generate ${n > 1 ? `${n} images` : "image"}`}
             </Button>
             <p className="text-xs text-[var(--color-fg-subtle)]">
               Actual cost may differ; we record Kling&apos;s reported deduction on completion.
@@ -175,6 +286,15 @@ export function CreateImageGenerationForm() {
           </CardContent>
         </Card>
       </aside>
+    </div>
+  );
+}
+
+function Row({ k, v }: { k: string; v: React.ReactNode }) {
+  return (
+    <div className="flex justify-between gap-4">
+      <dt className="text-[var(--color-fg-muted)]">{k}</dt>
+      <dd className="text-right text-[var(--color-fg)] font-mono">{v}</dd>
     </div>
   );
 }

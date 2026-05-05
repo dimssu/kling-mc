@@ -28,7 +28,10 @@ export function ImageGenerationCard({ gen }: { gen: ImageGeneration }) {
     onError: (err: Error) => toast.error(err.message),
   });
 
-  const display = gen.outputAsset ?? gen.referenceImage;
+  // The list endpoint doesn't include subjectImages (only the GET-by-id does),
+  // so before completion the card may not have a thumbnail to show — that's OK,
+  // the shimmer placeholder takes over.
+  const display = gen.outputAsset ?? gen.subjectImages?.[0] ?? gen.sceneImage ?? gen.styleImage ?? null;
 
   return (
     <div className="group relative flex flex-col gap-3 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-bg-elev)] p-3 transition-colors hover:border-[var(--color-border-strong)]">

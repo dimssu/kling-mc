@@ -26,7 +26,11 @@ model MediaAsset {
   sourceForGenerations         Generation[]      @relation("SourceVideo")
   referenceForGenerations      Generation[]      @relation("ReferenceImage")
   outputForGeneration          Generation?       @relation("Output")
-  referenceForImageGenerations ImageGeneration[] @relation("ImageGenReference")
+  // Image-gen relations: a MediaAsset can be a scene/style for image-gens.
+  // Subject images are tracked as a Postgres String[] on ImageGeneration
+  // (no FK), since Prisma doesn't model FK on array columns.
+  sceneForImageGenerations     ImageGeneration[] @relation("ImageGenScene")
+  styleForImageGenerations     ImageGeneration[] @relation("ImageGenStyle")
   outputForImageGeneration     ImageGeneration?  @relation("ImageGenOutput")
 
   @@index([ownerId, kind, createdAt])
@@ -77,13 +81,17 @@ model ImageGeneration {
   provider           String    @default("kling_official")
   providerTaskId     String?   @unique
   externalTaskId     String    @unique
-  referenceImageId   String
+  // Subjects: 1..4 MediaAsset IDs (Postgres native String[]). No FK because
+  // Prisma can't model FK on array columns; orphans are fine for single-user.
+  subjectImageIds    String[]
+  sceneImageId       String?
+  styleImageId       String?
   outputAssetId      String?   @unique
   prompt             String?
   negativePrompt     String?
   modelName          String
-  imageFidelity      Float?
   aspectRatio        String?
+  n                  Int       @default(1)
   estimatedCostUsd   Decimal   @db.Decimal(10, 4)
   actualCostUsd      Decimal?  @db.Decimal(10, 4)
   finalUnitDeduction String?
@@ -96,8 +104,9 @@ model ImageGeneration {
   submittedAt        DateTime?
   completedAt        DateTime?
 
-  referenceImage MediaAsset  @relation("ImageGenReference", fields: [referenceImageId], references: [id])
-  outputAsset    MediaAsset? @relation("ImageGenOutput", fields: [outputAssetId], references: [id])
+  sceneImage  MediaAsset? @relation("ImageGenScene", fields: [sceneImageId], references: [id])
+  styleImage  MediaAsset? @relation("ImageGenStyle", fields: [styleImageId], references: [id])
+  outputAsset MediaAsset? @relation("ImageGenOutput", fields: [outputAssetId], references: [id])
 
   @@index([ownerId, status, createdAt])
   @@index([ownerId, isFavorite])
