@@ -1,0 +1,69 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model MediaAsset {
+  id           String   @id @default(cuid())
+  ownerId      String
+  kind         String
+  filename     String
+  mimeType     String
+  sizeBytes    Int
+  durationSec  Float?
+  width        Int?
+  height       Int?
+  storageKey   String
+  thumbnailKey String?
+  isFavorite   Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  sourceForGenerations    Generation[] @relation("SourceVideo")
+  referenceForGenerations Generation[] @relation("ReferenceImage")
+  outputForGeneration     Generation?  @relation("Output")
+
+  @@index([ownerId, kind, createdAt])
+  @@index([ownerId, isFavorite])
+}
+
+model Generation {
+  id                   String    @id @default(cuid())
+  ownerId              String
+  status               String
+  provider             String    @default("kling_official")
+  providerTaskId       String?   @unique
+  externalTaskId       String    @unique
+  sourceVideoId        String
+  referenceImageId     String
+  outputAssetId        String?   @unique
+  prompt               String?
+  modelName            String
+  mode                 String
+  characterOrientation String
+  keepOriginalSound    Boolean   @default(true)
+  watermarkEnabled     Boolean   @default(false)
+  estimatedCostUsd     Decimal   @db.Decimal(10, 4)
+  actualCostUsd        Decimal?  @db.Decimal(10, 4)
+  finalUnitDeduction   String?
+  errorCode            Int?
+  errorMessage         String?
+  rawProviderPayload   Json?
+  isFavorite           Boolean   @default(false)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  submittedAt          DateTime?
+  completedAt          DateTime?
+
+  sourceVideo    MediaAsset  @relation("SourceVideo", fields: [sourceVideoId], references: [id])
+  referenceImage MediaAsset  @relation("ReferenceImage", fields: [referenceImageId], references: [id])
+  outputAsset    MediaAsset? @relation("Output", fields: [outputAssetId], references: [id])
+
+  @@index([ownerId, status, createdAt])
+  @@index([ownerId, isFavorite])
+  @@index([status, submittedAt])
+}
