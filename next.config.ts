@@ -5,7 +5,8 @@ const nextConfig: NextConfig = {
     root: process.cwd(),
   },
   images: {
-    dangerouslyAllowLocalIP: true,
+    // Local dev only — MinIO is on localhost. Hardened off in prod builds.
+    dangerouslyAllowLocalIP: process.env.NODE_ENV !== "production",
     remotePatterns: [
       {
         protocol: "http",

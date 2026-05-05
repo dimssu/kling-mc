@@ -43,20 +43,18 @@ class OfficialKlingProvider implements KlingProvider {
   async createMotionControlTask(
     input: MotionControlInput,
   ): Promise<CreateTaskResult> {
-    const body = {
+    const body: Record<string, unknown> = {
       model_name: input.modelName,
-      prompt: input.prompt,
       image_url: input.imageUrl,
       video_url: input.videoUrl,
       keep_original_sound: input.keepOriginalSound === false ? "no" : "yes",
       character_orientation: input.characterOrientation,
       mode: input.mode,
-      watermark_info: input.watermarkEnabled
-        ? { enabled: true }
-        : { enabled: false },
-      callback_url: input.callbackUrl ?? "",
       external_task_id: input.externalTaskId,
     };
+    if (input.prompt) body.prompt = input.prompt;
+    if (input.watermarkEnabled) body.watermark_info = { enabled: true };
+    if (input.callbackUrl) body.callback_url = input.callbackUrl;
 
     const data = await this.request<CreateData>(
       "POST",
@@ -86,7 +84,10 @@ class OfficialKlingProvider implements KlingProvider {
       statusMessage: data.task_status_msg ?? null,
       videoUrl: firstVideo?.url ?? null,
       watermarkVideoUrl: firstVideo?.watermark_url ?? null,
-      videoDurationSec: firstVideo?.duration ? Number(firstVideo.duration) : null,
+      videoDurationSec:
+        firstVideo?.duration != null && Number.isFinite(Number(firstVideo.duration))
+          ? Number(firstVideo.duration)
+          : null,
       finalUnitDeduction: data.final_unit_deduction ?? null,
       rawPayload: data,
     };

@@ -99,7 +99,8 @@ export async function POST(req: Request) {
     sourceVideo.durationSec ?? 5,
   );
 
-  const externalTaskId = `kmc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  const { randomUUID } = await import("node:crypto");
+  const externalTaskId = `kmc_${randomUUID().replace(/-/g, "")}`;
 
   const generation = await prisma.generation.create({
     data: {

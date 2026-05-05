@@ -14,6 +14,7 @@ import {
 } from "@/lib/storage";
 import { probeMedia } from "@/lib/media-probe";
 import { getEnv } from "@/lib/env";
+import { signGid } from "@/lib/webhook-auth";
 
 const POLL_PHASES: Array<{ untilSec: number; intervalMs: number }> = [
   { untilSec: 60, intervalMs: 5_000 },
@@ -47,9 +48,12 @@ export async function handleMotionControlJob(generationId: string): Promise<void
       3600,
     );
 
-    const callbackUrl = env.ENABLE_KLING_WEBHOOKS
-      ? `${env.APP_BASE_URL.replace(/\/+$/, "")}/api/webhooks/kling?gid=${encodeURIComponent(generation.id)}`
-      : undefined;
+    const callbackUrl =
+      env.ENABLE_KLING_WEBHOOKS && env.WEBHOOK_SECRET
+        ? `${env.APP_BASE_URL.replace(/\/+$/, "")}/api/webhooks/kling?gid=${encodeURIComponent(
+            generation.id,
+          )}&sig=${signGid(generation.id)}`
+        : undefined;
 
     log.info("Creating Kling task");
     try {
@@ -77,7 +81,11 @@ export async function handleMotionControlJob(generationId: string): Promise<void
       });
       log.info({ providerTaskId }, "Kling task created");
     } catch (err) {
-      await markFailed(generation.id, err);
+      const retryable = err instanceof KlingApiError && err.retryable;
+      if (!retryable) {
+        await markFailed(generation.id, err);
+        return;
+      }
       throw err;
     }
   }
@@ -107,7 +115,7 @@ async function pollUntilTerminal(
         continue;
       }
       await markFailed(generationId, err);
-      throw err;
+      return;
     }
 
     if (result.status === "succeed") {
@@ -165,6 +173,13 @@ async function finalizeSuccess(
     where: { id: generationId },
   });
 
+  // Race-dedup: if another worker already finalized this generation, bail before
+  // we re-download + re-upload.
+  if (generation.status === "completed") {
+    log.info("Already completed by another worker — skipping finalize");
+    return;
+  }
+
   log.info({ videoUrl: result.videoUrl }, "Downloading generated video");
   const { buffer, contentType } = await downloadToBuffer(result.videoUrl);
 
@@ -183,40 +198,65 @@ async function finalizeSuccess(
     durationSec: result.videoDurationSec,
   }));
 
-  const outputAsset = await prisma.mediaAsset.create({
-    data: {
-      ownerId: generation.ownerId,
-      kind: "generated_video",
-      filename: `${generation.id}.${ext}`,
-      mimeType: contentType,
-      sizeBytes: buffer.length,
-      durationSec: probe.durationSec ?? result.videoDurationSec,
-      width: probe.width,
-      height: probe.height,
-      storageKey,
-    },
-  });
+  const probedDuration = Number.isFinite(probe.durationSec ?? NaN)
+    ? probe.durationSec
+    : null;
+  const finalDuration =
+    probedDuration ??
+    (Number.isFinite(result.videoDurationSec ?? NaN) ? result.videoDurationSec : null);
 
   const actualCostUsd = deductionToUsd(
     generation.modelName as KlingModel,
     generation.mode as KlingMode,
     result.finalUnitDeduction,
-    probe.durationSec ?? result.videoDurationSec ?? 5,
+    finalDuration ?? 5,
   );
 
-  await prisma.generation.update({
-    where: { id: generationId },
-    data: {
-      status: "completed",
-      outputAssetId: outputAsset.id,
-      completedAt: new Date(),
-      finalUnitDeduction: result.finalUnitDeduction,
-      actualCostUsd: actualCostUsd != null ? new Decimal(actualCostUsd) : null,
-      rawProviderPayload: toJsonValue(result.rawPayload),
-    },
+  // Conditional update: only the worker that flips status from non-completed to
+  // completed wins. Use $transaction so the MediaAsset insert is rolled back if
+  // we lose the race.
+  await prisma.$transaction(async (tx) => {
+    const outputAsset = await tx.mediaAsset.create({
+      data: {
+        ownerId: generation.ownerId,
+        kind: "generated_video",
+        filename: `${generation.id}.${ext}`,
+        mimeType: contentType,
+        sizeBytes: buffer.length,
+        durationSec: finalDuration,
+        width: probe.width,
+        height: probe.height,
+        storageKey,
+      },
+    });
+    const updated = await tx.generation.updateMany({
+      where: { id: generationId, status: { not: "completed" } },
+      data: {
+        status: "completed",
+        outputAssetId: outputAsset.id,
+        completedAt: new Date(),
+        finalUnitDeduction: result.finalUnitDeduction,
+        actualCostUsd: actualCostUsd != null ? new Decimal(actualCostUsd) : null,
+        rawProviderPayload: toJsonValue(result.rawPayload),
+      },
+    });
+    if (updated.count === 0) {
+      // Lost the race — abort the transaction so the orphan MediaAsset rolls back.
+      throw new RaceLostError();
+    }
+  }).catch((err) => {
+    if (err instanceof RaceLostError) {
+      log.info("Lost finalize race; rolled back");
+      return;
+    }
+    throw err;
   });
 
-  log.info({ outputAssetId: outputAsset.id, publicUrl: getPublicUrl(storageKey) }, "Generation completed");
+  log.info({ publicUrl: getPublicUrl(storageKey) }, "Generation completed");
+}
+
+class RaceLostError extends Error {
+  constructor() { super("race-lost"); }
 }
 
 async function markFailed(generationId: string, err: unknown): Promise<void> {

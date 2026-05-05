@@ -12,14 +12,28 @@ export async function POST(req: Request, ctx: Ctx) {
   const { id } = await ctx.params;
   const body = (await req.json().catch(() => ({}))) as { value?: boolean };
 
-  const generation = await prisma.generation.findUnique({ where: { id } });
-  if (!generation || generation.ownerId !== env.DEFAULT_USER_ID) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  // Atomic toggle when no explicit value is given. Avoids the read-modify-write
+  // race when two tabs click the star at the same time.
+  if (typeof body.value === "boolean") {
+    const updated = await prisma.generation.updateMany({
+      where: { id, ownerId: env.DEFAULT_USER_ID },
+      data: { isFavorite: body.value },
+    });
+    if (updated.count === 0) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+  } else {
+    const result = await prisma.$executeRawUnsafe(
+      `UPDATE "Generation" SET "isFavorite" = NOT "isFavorite", "updatedAt" = NOW()
+       WHERE "id" = $1 AND "ownerId" = $2`,
+      id,
+      env.DEFAULT_USER_ID,
+    );
+    if (result === 0) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
   }
 
-  const updated = await prisma.generation.update({
-    where: { id },
-    data: { isFavorite: body.value ?? !generation.isFavorite },
-  });
-  return NextResponse.json({ generation: updated });
+  const generation = await prisma.generation.findUnique({ where: { id } });
+  return NextResponse.json({ generation });
 }

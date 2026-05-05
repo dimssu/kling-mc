@@ -28,6 +28,7 @@ const schema = z.object({
     .string()
     .default("false")
     .transform((v) => v === "true"),
+  WEBHOOK_SECRET: z.string().default(""),
 
   MAX_CONCURRENT_GENERATIONS: z.coerce.number().int().min(1).max(20).default(2),
 
