@@ -90,7 +90,6 @@ export async function POST(req: Request) {
       prompt: input.prompt,
       negativePrompt: input.negativePrompt,
       modelName: input.modelName,
-      imageFidelity: input.imageFidelity,
       aspectRatio: input.aspectRatio,
       estimatedCostUsd: new Decimal(estimatedCost),
     },

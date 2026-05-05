@@ -21,11 +21,11 @@ import {
 import { AssetSlot } from "@/components/AssetSlot";
 
 const IMAGE_PRICING: Record<string, number> = {
-  "kling-v2-6": 0.014,
-  "kling-v3": 0.020,
+  "kling-v2": 0.014,
+  "kling-v2-1": 0.020,
 };
 
-type AspectRatio = "16:9" | "9:16" | "1:1" | "4:3" | "3:4";
+type AspectRatio = "16:9" | "9:16" | "1:1" | "4:3" | "3:4" | "3:2" | "2:3" | "21:9";
 
 export function CreateImageGenerationForm() {
   const router = useRouter();
@@ -33,9 +33,8 @@ export function CreateImageGenerationForm() {
   const [referenceImage, setReferenceImage] = React.useState<MediaAsset | null>(null);
   const [prompt, setPrompt] = React.useState("");
   const [negativePrompt, setNegativePrompt] = React.useState("");
-  const [modelName, setModelName] = React.useState<"kling-v2-6" | "kling-v3">("kling-v2-6");
-  const [aspectRatio, setAspectRatio] = React.useState<AspectRatio>("1:1");
-  const [imageFidelity, setImageFidelity] = React.useState(0.5);
+  const [modelName, setModelName] = React.useState<"kling-v2" | "kling-v2-1">("kling-v2-1");
+  const [aspectRatio, setAspectRatio] = React.useState<AspectRatio>("16:9");
 
   const submit = useMutation({
     mutationFn: () => {
@@ -45,7 +44,6 @@ export function CreateImageGenerationForm() {
         prompt: prompt || undefined,
         negativePrompt: negativePrompt || undefined,
         modelName,
-        imageFidelity,
         aspectRatio,
       });
     },
@@ -123,8 +121,8 @@ export function CreateImageGenerationForm() {
               <Select value={modelName} onValueChange={(v) => setModelName(v as typeof modelName)}>
                 <SelectTrigger id="model"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="kling-v2-6">Kling v2.6</SelectItem>
-                  <SelectItem value="kling-v3">Kling v3</SelectItem>
+                  <SelectItem value="kling-v2">Kling v2</SelectItem>
+                  <SelectItem value="kling-v2-1">Kling v2.1</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -133,31 +131,16 @@ export function CreateImageGenerationForm() {
               <Select value={aspectRatio} onValueChange={(v) => setAspectRatio(v as AspectRatio)}>
                 <SelectTrigger id="aspect"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="1:1">1:1 — square</SelectItem>
                   <SelectItem value="16:9">16:9 — landscape</SelectItem>
                   <SelectItem value="9:16">9:16 — portrait</SelectItem>
+                  <SelectItem value="1:1">1:1 — square</SelectItem>
                   <SelectItem value="4:3">4:3</SelectItem>
                   <SelectItem value="3:4">3:4</SelectItem>
+                  <SelectItem value="3:2">3:2</SelectItem>
+                  <SelectItem value="2:3">2:3</SelectItem>
+                  <SelectItem value="21:9">21:9 — ultrawide</SelectItem>
                 </SelectContent>
               </Select>
-            </div>
-            <div className="space-y-1.5 sm:col-span-2">
-              <Label htmlFor="fidelity">
-                Reference fidelity ({imageFidelity.toFixed(2)})
-              </Label>
-              <input
-                id="fidelity"
-                type="range"
-                min={0}
-                max={1}
-                step={0.05}
-                value={imageFidelity}
-                onChange={(e) => setImageFidelity(Number(e.target.value))}
-                className="w-full accent-[var(--color-accent)]"
-              />
-              <p className="text-xs text-[var(--color-fg-subtle)]">
-                0 = follow the prompt freely · 1 = stay very close to the reference image
-              </p>
             </div>
           </CardContent>
         </Card>

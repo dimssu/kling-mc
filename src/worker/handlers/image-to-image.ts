@@ -4,7 +4,8 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { getKlingProvider } from "@/lib/kling";
 import { KlingApiError } from "@/lib/kling/errors";
-import { imageDeductionToUsd, type KlingModel } from "@/lib/kling/pricing";
+import { imageDeductionToUsd, type KlingImageModel } from "@/lib/kling/pricing";
+import type { KlingImageAspectRatio } from "@/lib/kling/types";
 import { downloadToBuffer, getKlingFetchUrl, getPublicUrl, uploadObject } from "@/lib/storage";
 import { sniffMime, extForMime } from "@/lib/mime-sniff";
 import { getEnv } from "@/lib/env";
@@ -45,12 +46,16 @@ export async function handleImageGenerationJob(imageGenerationId: string): Promi
     log.info("Creating Kling image-to-image task");
     try {
       const result = await provider.createImageToImageTask({
-        modelName: imageGen.modelName as KlingModel,
-        imageUrl: referenceUrl,
+        modelName: imageGen.modelName as KlingImageModel,
+        // v0 always sends a single subject image. Multi-subject + scene/style
+        // can be added once we add slots for them in the form + schema.
+        subjectImageUrls: [referenceUrl],
         prompt: imageGen.prompt ?? undefined,
         negativePrompt: imageGen.negativePrompt ?? undefined,
-        imageFidelity: imageGen.imageFidelity ?? undefined,
-        aspectRatio: imageGen.aspectRatio ?? undefined,
+        aspectRatio: (imageGen.aspectRatio ?? undefined) as
+          | KlingImageAspectRatio
+          | undefined,
+        n: 1,
         callbackUrl,
         externalTaskId: imageGen.externalTaskId,
       });
@@ -168,8 +173,9 @@ async function finalizeSuccess(
   await uploadObject({ key: storageKey, body: buffer, contentType: finalContentType, contentLength: buffer.length });
 
   const actualCostUsd = imageDeductionToUsd(
-    imageGen.modelName as KlingModel,
+    imageGen.modelName as KlingImageModel,
     result.finalUnitDeduction,
+    1, // n=1 in v0
   );
 
   await prisma.$transaction(async (tx) => {

@@ -117,7 +117,6 @@ export default function ImageGenerationDetailPage({ params }: Props) {
           <dl className="grid gap-3 sm:grid-cols-2">
             <Detail k="Model" v={g.modelName} />
             <Detail k="Aspect ratio" v={g.aspectRatio ?? "—"} />
-            <Detail k="Reference fidelity" v={g.imageFidelity != null ? g.imageFidelity.toFixed(2) : "—"} />
             <Detail k="Estimated cost" v={formatUsd(Number(g.estimatedCostUsd))} />
             <Detail k="Actual cost" v={g.actualCostUsd != null ? formatUsd(Number(g.actualCostUsd)) : "—"} />
             <Detail k="Final unit deduction" v={g.finalUnitDeduction ?? "—"} />

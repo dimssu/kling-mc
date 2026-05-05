@@ -79,7 +79,6 @@ export type ImageGeneration = {
   prompt: string | null;
   negativePrompt: string | null;
   modelName: string;
-  imageFidelity: number | null;
   aspectRatio: string | null;
   estimatedCostUsd: string | number;
   actualCostUsd: string | number | null;
@@ -152,9 +151,9 @@ export const api = {
     referenceImageId: string;
     prompt?: string;
     negativePrompt?: string;
-    modelName: "kling-v2-6" | "kling-v3";
-    imageFidelity?: number;
-    aspectRatio?: "16:9" | "9:16" | "1:1" | "4:3" | "3:4";
+    modelName: "kling-v2" | "kling-v2-1";
+    aspectRatio?: "16:9" | "9:16" | "1:1" | "4:3" | "3:4" | "3:2" | "2:3" | "21:9";
+    n?: number;
   }) =>
     request<{ imageGeneration: ImageGeneration }>("/api/image-generations", {
       method: "POST",

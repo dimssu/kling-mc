@@ -7,7 +7,7 @@ export {
   imageDeductionToUsd,
   imagePricingTable,
 } from "./pricing";
-export type { KlingMode, KlingModel } from "./pricing";
+export type { KlingMode, KlingModel, KlingImageModel } from "./pricing";
 export { KlingApiError, isRetryable, isUserFacing } from "./errors";
 export type {
   KlingProvider,

@@ -12,13 +12,11 @@ import type {
   TaskQueryResult,
 } from "./types";
 
-// PLACEHOLDER paths and field names for the Kling image-to-image endpoint.
-// I haven't been able to fetch the verbatim spec for this endpoint yet — these
-// are extrapolated from Kling's other documented endpoints (Motion Control,
-// Lip-Sync) and from third-party aggregators that wrap the same model.
-// Verify against the official portal before relying on it for production.
-const IMAGE_TO_IMAGE_CREATE_PATH = "/v1/images/generations";
-const IMAGE_TO_IMAGE_QUERY_PATH = "/v1/images/generations";
+// Image generation uses Kling's "multi-image to image" endpoint. Even when we
+// pass a single subject image (n=1), the spec requires the subject_image_list
+// array shape.
+const IMAGE_TO_IMAGE_CREATE_PATH = "/v1/images/multi-image2image";
+const IMAGE_TO_IMAGE_QUERY_PATH = "/v1/images/multi-image2image";
 
 type KlingEnvelope<T> = {
   code: number;
@@ -55,8 +53,10 @@ type ImageQueryData = CreateData & {
     images?: Array<{
       index?: number;
       url: string;
+      watermark_url?: string;
     }>;
   };
+  watermark_info?: { enabled: boolean };
   final_unit_deduction?: string;
 };
 
@@ -117,15 +117,20 @@ class OfficialKlingProvider implements KlingProvider {
   async createImageToImageTask(
     input: ImageToImageInput,
   ): Promise<CreateTaskResult> {
+    if (input.subjectImageUrls.length === 0 || input.subjectImageUrls.length > 4) {
+      throw new Error("subjectImageUrls must contain between 1 and 4 entries");
+    }
     const body: Record<string, unknown> = {
       model_name: input.modelName,
-      image: input.imageUrl,
+      subject_image_list: input.subjectImageUrls.map((u) => ({ subject_image: u })),
       external_task_id: input.externalTaskId,
     };
     if (input.prompt) body.prompt = input.prompt;
     if (input.negativePrompt) body.negative_prompt = input.negativePrompt;
-    if (input.imageFidelity != null) body.image_fidelity = input.imageFidelity;
+    if (input.sceneImageUrl) body.scene_image = input.sceneImageUrl;
+    if (input.styleImageUrl) body.style_image = input.styleImageUrl;
     if (input.aspectRatio) body.aspect_ratio = input.aspectRatio;
+    if (input.n != null) body.n = input.n;
     if (input.callbackUrl) body.callback_url = input.callbackUrl;
 
     const data = await this.request<CreateData>(
@@ -147,14 +152,20 @@ class OfficialKlingProvider implements KlingProvider {
       `${IMAGE_TO_IMAGE_QUERY_PATH}/${encodeURIComponent(taskId)}`,
     );
 
-    const firstImage = data.task_result?.images?.[0];
+    const rawImages = data.task_result?.images ?? [];
+    const images = rawImages.map((img, i) => ({
+      index: img.index ?? i,
+      url: img.url,
+      watermarkUrl: img.watermark_url ?? null,
+    }));
 
     return {
       providerTaskId: data.task_id,
       externalTaskId: data.task_info?.external_task_id ?? null,
       status: data.task_status,
       statusMessage: data.task_status_msg ?? null,
-      imageUrl: firstImage?.url ?? null,
+      imageUrl: images[0]?.url ?? null,
+      images,
       finalUnitDeduction: data.final_unit_deduction ?? null,
       rawPayload: data,
     };

@@ -1,4 +1,4 @@
-import type { KlingMode, KlingModel } from "./pricing";
+import type { KlingMode, KlingModel, KlingImageModel } from "./pricing";
 
 export type CharacterOrientation = "image" | "video";
 
@@ -15,13 +15,22 @@ export type MotionControlInput = {
   externalTaskId: string;
 };
 
+// Image-gen aspect ratios per the Kling multi-image2image spec.
+export type KlingImageAspectRatio =
+  | "16:9" | "9:16" | "1:1" | "4:3" | "3:4" | "3:2" | "2:3" | "21:9";
+
 export type ImageToImageInput = {
-  modelName: KlingModel;
-  imageUrl: string;
+  modelName: KlingImageModel;
+  // Required: 1–4 subject images. We keep them as URLs for the wire format
+  // (worker resolves them from MediaAsset.storageKey via getKlingFetchUrl).
+  subjectImageUrls: string[];
+  // Optional reference images.
+  sceneImageUrl?: string;
+  styleImageUrl?: string;
   prompt?: string;
   negativePrompt?: string;
-  imageFidelity?: number; // 0..1, how closely to follow the reference
-  aspectRatio?: string; // e.g. "16:9" | "9:16" | "1:1" | "4:3" | "3:4"
+  aspectRatio?: KlingImageAspectRatio;
+  n?: number; // 1–9, default 1
   callbackUrl?: string;
   externalTaskId: string;
 };
@@ -46,12 +55,21 @@ export type TaskQueryResult = {
   rawPayload: unknown;
 };
 
+export type GeneratedImage = {
+  index: number;
+  url: string;
+  watermarkUrl: string | null;
+};
+
 export type ImageTaskQueryResult = {
   providerTaskId: string;
   externalTaskId: string | null;
   status: KlingTaskStatus;
   statusMessage: string | null;
+  // First image, for the common n=1 path.
   imageUrl: string | null;
+  // Full list when n>1.
+  images: GeneratedImage[];
   finalUnitDeduction: string | null;
   rawPayload: unknown;
 };

@@ -7,12 +7,13 @@ const RATE_USD_PER_5S: Record<KlingModel, Record<KlingMode, number>> = {
   "kling-v3": { std: 0.375, pro: 0.50 },
 };
 
-// Image rates: USD per generated image. Verify against your account.
-// Kling's image-to-image is typically around $0.014 per image at the cheap
-// tier; figures here are placeholders, override when you confirm them.
-const IMAGE_RATE_USD: Record<KlingModel, number> = {
-  "kling-v2-6": 0.014,
-  "kling-v3": 0.020,
+// Image-gen uses a different model namespace (kling-v2 / kling-v2-1) than
+// motion-control video (kling-v2-6 / kling-v3). Per-image rates below are
+// placeholders — override once you confirm your account's actual pricing.
+export type KlingImageModel = "kling-v2" | "kling-v2-1";
+const IMAGE_RATE_USD: Record<KlingImageModel, number> = {
+  "kling-v2": 0.014,
+  "kling-v2-1": 0.020,
 };
 
 export function estimateCostUsd(
@@ -39,17 +40,19 @@ export function deductionToUsd(
   return estimateCostUsd(model, mode, units);
 }
 
-export function estimateImageCostUsd(model: KlingModel): number {
-  return Number((IMAGE_RATE_USD[model] ?? 0).toFixed(4));
+export function estimateImageCostUsd(model: KlingImageModel, n = 1): number {
+  const rate = IMAGE_RATE_USD[model] ?? 0;
+  return Number((rate * Math.max(1, n)).toFixed(4));
 }
 
 export function imageDeductionToUsd(
-  model: KlingModel,
+  model: KlingImageModel,
   finalUnitDeduction: string | null | undefined,
+  n = 1,
 ): number | null {
-  if (finalUnitDeduction == null) return estimateImageCostUsd(model);
+  if (finalUnitDeduction == null) return estimateImageCostUsd(model, n);
   const units = Number(finalUnitDeduction);
-  if (!Number.isFinite(units)) return estimateImageCostUsd(model);
+  if (!Number.isFinite(units)) return estimateImageCostUsd(model, n);
   // Treat each "unit" as one image at the model's rate.
   return Number((units * (IMAGE_RATE_USD[model] ?? 0)).toFixed(4));
 }
