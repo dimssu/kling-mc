@@ -67,6 +67,34 @@ export type Generation = {
   outputAsset?: MediaAsset | null;
 };
 
+export type ImageGeneration = {
+  id: string;
+  ownerId: string;
+  status: "queued" | "processing" | "completed" | "failed";
+  provider: string;
+  providerTaskId: string | null;
+  externalTaskId: string;
+  referenceImageId: string;
+  outputAssetId: string | null;
+  prompt: string | null;
+  negativePrompt: string | null;
+  modelName: string;
+  imageFidelity: number | null;
+  aspectRatio: string | null;
+  estimatedCostUsd: string | number;
+  actualCostUsd: string | number | null;
+  finalUnitDeduction: string | null;
+  errorCode: number | null;
+  errorMessage: string | null;
+  isFavorite: boolean;
+  createdAt: string;
+  updatedAt: string;
+  submittedAt: string | null;
+  completedAt: string | null;
+  referenceImage?: MediaAsset;
+  outputAsset?: MediaAsset | null;
+};
+
 export type UsageSummary = {
   cost: { today: number; week: number; month: number; allTime: number; pending: number };
   counts: Record<string, number>;
@@ -120,5 +148,34 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ value }),
     }),
+  createImageGeneration: (input: {
+    referenceImageId: string;
+    prompt?: string;
+    negativePrompt?: string;
+    modelName: "kling-v2-6" | "kling-v3";
+    imageFidelity?: number;
+    aspectRatio?: "16:9" | "9:16" | "1:1" | "4:3" | "3:4";
+  }) =>
+    request<{ imageGeneration: ImageGeneration }>("/api/image-generations", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  listImageGenerations: (params: { status?: string; favorite?: boolean } = {}) => {
+    const sp = new URLSearchParams();
+    if (params.status) sp.set("status", params.status);
+    if (params.favorite) sp.set("favorite", "true");
+    return request<{ items: ImageGeneration[]; nextCursor: string | null }>(
+      `/api/image-generations?${sp}`,
+    );
+  },
+  getImageGeneration: (id: string) =>
+    request<{ imageGeneration: ImageGeneration }>(`/api/image-generations/${id}`),
+  deleteImageGeneration: (id: string) =>
+    request<{ ok: true }>(`/api/image-generations/${id}`, { method: "DELETE" }),
+  toggleImageGenerationFavorite: (id: string, value?: boolean) =>
+    request<{ imageGeneration: ImageGeneration }>(
+      `/api/image-generations/${id}/favorite`,
+      { method: "POST", body: JSON.stringify({ value }) },
+    ),
   getUsage: () => request<UsageSummary>("/api/usage"),
 };

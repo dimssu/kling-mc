@@ -3,9 +3,14 @@ import IORedis from "ioredis";
 import { getEnv } from "./env";
 
 export const MOTION_CONTROL_QUEUE = "motion-control" as const;
+export const IMAGE_GEN_QUEUE = "image-to-image" as const;
 
 export type MotionControlJobData = {
   generationId: string;
+};
+
+export type ImageGenerationJobData = {
+  imageGenerationId: string;
 };
 
 let _connection: ConnectionOptions | null = null;
@@ -41,4 +46,19 @@ export function getMotionControlQueue(): Queue<MotionControlJobData> {
     },
   });
   return _motionQueue;
+}
+
+let _imageGenQueue: Queue<ImageGenerationJobData> | null = null;
+export function getImageGenerationQueue(): Queue<ImageGenerationJobData> {
+  if (_imageGenQueue) return _imageGenQueue;
+  _imageGenQueue = new Queue<ImageGenerationJobData>(IMAGE_GEN_QUEUE, {
+    connection: getRedisConnection(),
+    defaultJobOptions: {
+      attempts: 5,
+      backoff: { type: "exponential", delay: 2000 },
+      removeOnComplete: { age: 3600 * 24, count: 1000 },
+      removeOnFail: { age: 3600 * 24 * 7 },
+    },
+  });
+  return _imageGenQueue;
 }

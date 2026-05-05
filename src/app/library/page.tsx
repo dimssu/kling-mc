@@ -11,10 +11,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { GenerationCard } from "@/components/GenerationCard";
+import { ImageGenerationCard } from "@/components/ImageGenerationCard";
 import { MediaThumb } from "@/components/MediaThumb";
 
 export default function LibraryPage() {
-  const [tab, setTab] = React.useState("generations");
+  const [tab, setTab] = React.useState("videos");
   const [favOnly, setFavOnly] = React.useState(false);
 
   return (
@@ -29,7 +30,8 @@ export default function LibraryPage() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Tabs value={tab} onValueChange={setTab}>
           <TabsList>
-            <TabsTrigger value="generations">Generations</TabsTrigger>
+            <TabsTrigger value="videos">Videos</TabsTrigger>
+            <TabsTrigger value="images">Images</TabsTrigger>
             <TabsTrigger value="uploads">Uploads</TabsTrigger>
           </TabsList>
         </Tabs>
@@ -43,11 +45,54 @@ export default function LibraryPage() {
         </Button>
       </div>
 
-      {tab === "generations" ? (
-        <GenerationsTab favOnly={favOnly} />
-      ) : (
-        <UploadsTab favOnly={favOnly} />
-      )}
+      {tab === "videos" && <GenerationsTab favOnly={favOnly} />}
+      {tab === "images" && <ImageGenerationsTab favOnly={favOnly} />}
+      {tab === "uploads" && <UploadsTab favOnly={favOnly} />}
+    </div>
+  );
+}
+
+function ImageGenerationsTab({ favOnly }: { favOnly: boolean }) {
+  const q = useQuery({
+    queryKey: ["image-generations", { favorite: favOnly }],
+    queryFn: () => api.listImageGenerations({ favorite: favOnly }),
+    refetchInterval: 8_000,
+  });
+
+  if (q.isLoading) {
+    return (
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <div key={i} className="aspect-video rounded-[var(--radius-lg)] shimmer" />
+        ))}
+      </div>
+    );
+  }
+
+  if (!q.data?.items.length) {
+    return (
+      <Card>
+        <CardContent className="flex flex-col items-center justify-center gap-3 py-16 text-center">
+          <div className="grid h-10 w-10 place-items-center rounded-full bg-[var(--color-bg-elev-2)]">
+            <Sparkles className="h-4 w-4 text-[var(--color-accent)]" />
+          </div>
+          <p className="font-medium">No image generations</p>
+          <p className="text-sm text-[var(--color-fg-muted)]">
+            Try the Image tab on the Create page.
+          </p>
+          <Button asChild>
+            <Link href="/create">Create</Link>
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      {q.data.items.map((g) => (
+        <ImageGenerationCard key={g.id} gen={g} />
+      ))}
     </div>
   );
 }

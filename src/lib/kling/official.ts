@@ -4,11 +4,21 @@ import { KlingApiError, shouldRefreshToken } from "./errors";
 import { getKlingToken, invalidateKlingToken } from "./jwt";
 import type {
   CreateTaskResult,
+  ImageTaskQueryResult,
+  ImageToImageInput,
   KlingProvider,
   KlingTaskStatus,
   MotionControlInput,
   TaskQueryResult,
 } from "./types";
+
+// PLACEHOLDER paths and field names for the Kling image-to-image endpoint.
+// I haven't been able to fetch the verbatim spec for this endpoint yet — these
+// are extrapolated from Kling's other documented endpoints (Motion Control,
+// Lip-Sync) and from third-party aggregators that wrap the same model.
+// Verify against the official portal before relying on it for production.
+const IMAGE_TO_IMAGE_CREATE_PATH = "/v1/images/generations";
+const IMAGE_TO_IMAGE_QUERY_PATH = "/v1/images/generations";
 
 type KlingEnvelope<T> = {
   code: number;
@@ -36,6 +46,17 @@ type QueryData = CreateData & {
     }>;
   };
   watermark_info?: { enabled: boolean };
+  final_unit_deduction?: string;
+};
+
+type ImageQueryData = CreateData & {
+  task_status_msg?: string;
+  task_result?: {
+    images?: Array<{
+      index?: number;
+      url: string;
+    }>;
+  };
   final_unit_deduction?: string;
 };
 
@@ -88,6 +109,52 @@ class OfficialKlingProvider implements KlingProvider {
         firstVideo?.duration != null && Number.isFinite(Number(firstVideo.duration))
           ? Number(firstVideo.duration)
           : null,
+      finalUnitDeduction: data.final_unit_deduction ?? null,
+      rawPayload: data,
+    };
+  }
+
+  async createImageToImageTask(
+    input: ImageToImageInput,
+  ): Promise<CreateTaskResult> {
+    const body: Record<string, unknown> = {
+      model_name: input.modelName,
+      image: input.imageUrl,
+      external_task_id: input.externalTaskId,
+    };
+    if (input.prompt) body.prompt = input.prompt;
+    if (input.negativePrompt) body.negative_prompt = input.negativePrompt;
+    if (input.imageFidelity != null) body.image_fidelity = input.imageFidelity;
+    if (input.aspectRatio) body.aspect_ratio = input.aspectRatio;
+    if (input.callbackUrl) body.callback_url = input.callbackUrl;
+
+    const data = await this.request<CreateData>(
+      "POST",
+      IMAGE_TO_IMAGE_CREATE_PATH,
+      body,
+    );
+
+    return {
+      providerTaskId: data.task_id,
+      status: data.task_status,
+      rawPayload: data,
+    };
+  }
+
+  async getImageToImageTask(taskId: string): Promise<ImageTaskQueryResult> {
+    const data = await this.request<ImageQueryData>(
+      "GET",
+      `${IMAGE_TO_IMAGE_QUERY_PATH}/${encodeURIComponent(taskId)}`,
+    );
+
+    const firstImage = data.task_result?.images?.[0];
+
+    return {
+      providerTaskId: data.task_id,
+      externalTaskId: data.task_info?.external_task_id ?? null,
+      status: data.task_status,
+      statusMessage: data.task_status_msg ?? null,
+      imageUrl: firstImage?.url ?? null,
       finalUnitDeduction: data.final_unit_deduction ?? null,
       rawPayload: data,
     };

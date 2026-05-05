@@ -15,6 +15,17 @@ export type MotionControlInput = {
   externalTaskId: string;
 };
 
+export type ImageToImageInput = {
+  modelName: KlingModel;
+  imageUrl: string;
+  prompt?: string;
+  negativePrompt?: string;
+  imageFidelity?: number; // 0..1, how closely to follow the reference
+  aspectRatio?: string; // e.g. "16:9" | "9:16" | "1:1" | "4:3" | "3:4"
+  callbackUrl?: string;
+  externalTaskId: string;
+};
+
 export type CreateTaskResult = {
   providerTaskId: string;
   status: KlingTaskStatus;
@@ -35,7 +46,19 @@ export type TaskQueryResult = {
   rawPayload: unknown;
 };
 
+export type ImageTaskQueryResult = {
+  providerTaskId: string;
+  externalTaskId: string | null;
+  status: KlingTaskStatus;
+  statusMessage: string | null;
+  imageUrl: string | null;
+  finalUnitDeduction: string | null;
+  rawPayload: unknown;
+};
+
 export interface KlingProvider {
   createMotionControlTask(input: MotionControlInput): Promise<CreateTaskResult>;
   getMotionControlTask(taskId: string): Promise<TaskQueryResult>;
+  createImageToImageTask(input: ImageToImageInput): Promise<CreateTaskResult>;
+  getImageToImageTask(taskId: string): Promise<ImageTaskQueryResult>;
 }

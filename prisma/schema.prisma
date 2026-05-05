@@ -23,9 +23,11 @@ model MediaAsset {
   isFavorite   Boolean  @default(false)
   createdAt    DateTime @default(now())
 
-  sourceForGenerations    Generation[] @relation("SourceVideo")
-  referenceForGenerations Generation[] @relation("ReferenceImage")
-  outputForGeneration     Generation?  @relation("Output")
+  sourceForGenerations         Generation[]      @relation("SourceVideo")
+  referenceForGenerations      Generation[]      @relation("ReferenceImage")
+  outputForGeneration          Generation?       @relation("Output")
+  referenceForImageGenerations ImageGeneration[] @relation("ImageGenReference")
+  outputForImageGeneration     ImageGeneration?  @relation("ImageGenOutput")
 
   @@index([ownerId, kind, createdAt])
   @@index([ownerId, isFavorite])
@@ -62,6 +64,40 @@ model Generation {
   sourceVideo    MediaAsset  @relation("SourceVideo", fields: [sourceVideoId], references: [id])
   referenceImage MediaAsset  @relation("ReferenceImage", fields: [referenceImageId], references: [id])
   outputAsset    MediaAsset? @relation("Output", fields: [outputAssetId], references: [id])
+
+  @@index([ownerId, status, createdAt])
+  @@index([ownerId, isFavorite])
+  @@index([status, submittedAt])
+}
+
+model ImageGeneration {
+  id                 String    @id @default(cuid())
+  ownerId            String
+  status             String
+  provider           String    @default("kling_official")
+  providerTaskId     String?   @unique
+  externalTaskId     String    @unique
+  referenceImageId   String
+  outputAssetId      String?   @unique
+  prompt             String?
+  negativePrompt     String?
+  modelName          String
+  imageFidelity      Float?
+  aspectRatio        String?
+  estimatedCostUsd   Decimal   @db.Decimal(10, 4)
+  actualCostUsd      Decimal?  @db.Decimal(10, 4)
+  finalUnitDeduction String?
+  errorCode          Int?
+  errorMessage       String?
+  rawProviderPayload Json?
+  isFavorite         Boolean   @default(false)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  submittedAt        DateTime?
+  completedAt        DateTime?
+
+  referenceImage MediaAsset  @relation("ImageGenReference", fields: [referenceImageId], references: [id])
+  outputAsset    MediaAsset? @relation("ImageGenOutput", fields: [outputAssetId], references: [id])
 
   @@index([ownerId, status, createdAt])
   @@index([ownerId, isFavorite])

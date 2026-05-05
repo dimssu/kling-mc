@@ -118,3 +118,14 @@ export const createGenerationSchema = z.object({
 });
 
 export type CreateGenerationInput = z.infer<typeof createGenerationSchema>;
+
+export const createImageGenerationSchema = z.object({
+  referenceImageId: z.string().min(1),
+  prompt: z.string().max(2500).optional(),
+  negativePrompt: z.string().max(2500).optional(),
+  modelName: z.enum(["kling-v2-6", "kling-v3"]),
+  imageFidelity: z.number().min(0).max(1).optional(),
+  aspectRatio: z.enum(["16:9", "9:16", "1:1", "4:3", "3:4"]).optional(),
+});
+
+export type CreateImageGenerationInput = z.infer<typeof createImageGenerationSchema>;
