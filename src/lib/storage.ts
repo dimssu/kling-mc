@@ -121,6 +121,26 @@ export function getPublicUrl(key: string): string {
   return `${env.S3_PUBLIC_URL_BASE.replace(/\/+$/, "")}/${key}`;
 }
 
+/**
+ * URL we hand to external services (like Kling) so they can fetch our
+ * uploads. Prefers the publicly-tunneled hostname (S3_PUBLIC_ENDPOINT) when
+ * set; otherwise falls back to the regular public path (works in prod where
+ * the bucket itself is on a public domain).
+ *
+ * The bucket is configured for anonymous read (see docker-compose.dev.yml's
+ * minio-bucket-init step). We deliberately don't presign here because cloudflared
+ * rewrites the Host header before forwarding to MinIO, which invalidates SigV4
+ * signatures. Keys include random UUIDs so guessing is impractical.
+ */
+export function getKlingFetchUrl(key: string): string {
+  const env = getEnv();
+  if (env.S3_PUBLIC_ENDPOINT) {
+    const base = env.S3_PUBLIC_ENDPOINT.replace(/\/+$/, "");
+    return `${base}/${env.S3_BUCKET}/${key}`;
+  }
+  return getPublicUrl(key);
+}
+
 export async function downloadToBuffer(url: string): Promise<{
   buffer: Buffer;
   contentType: string;

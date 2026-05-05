@@ -8,7 +8,7 @@ import { KlingApiError } from "@/lib/kling/errors";
 import { deductionToUsd, type KlingMode, type KlingModel } from "@/lib/kling/pricing";
 import {
   downloadToBuffer,
-  getPresignedDownloadUrl,
+  getKlingFetchUrl,
   getPublicUrl,
   uploadObject,
 } from "@/lib/storage";
@@ -42,11 +42,9 @@ export async function handleMotionControlJob(generationId: string): Promise<void
   let providerTaskId = generation.providerTaskId;
 
   if (!providerTaskId) {
-    const sourceUrl = await getPresignedDownloadUrl(generation.sourceVideo.storageKey, 3600);
-    const referenceUrl = await getPresignedDownloadUrl(
-      generation.referenceImage.storageKey,
-      3600,
-    );
+    const sourceUrl = getKlingFetchUrl(generation.sourceVideo.storageKey);
+    const referenceUrl = getKlingFetchUrl(generation.referenceImage.storageKey);
+    log.info({ sourceUrl, referenceUrl }, "Resolved fetch URLs for Kling");
 
     const callbackUrl =
       env.ENABLE_KLING_WEBHOOKS && env.WEBHOOK_SECRET
