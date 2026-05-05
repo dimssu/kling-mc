@@ -5,6 +5,7 @@ import {
   DeleteObjectCommand,
   HeadObjectCommand,
 } from "@aws-sdk/client-s3";
+import { Upload } from "@aws-sdk/lib-storage";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { Readable } from "node:stream";
 import { getEnv } from "./env";
@@ -43,6 +44,31 @@ export async function uploadObject(input: UploadInput): Promise<void> {
       ContentLength: input.contentLength,
     }),
   );
+}
+
+/**
+ * Streaming multipart upload — keeps memory bounded at ~5 MB regardless of
+ * input size. Use this for user uploads where the file may be up to 100 MB.
+ */
+export async function uploadObjectStream(input: {
+  key: string;
+  body: Readable;
+  contentType: string;
+}): Promise<void> {
+  const env = getEnv();
+  const upload = new Upload({
+    client: client(),
+    params: {
+      Bucket: env.S3_BUCKET,
+      Key: input.key,
+      Body: input.body,
+      ContentType: input.contentType,
+    },
+    queueSize: 2,
+    partSize: 5 * 1024 * 1024,
+    leavePartsOnError: false,
+  });
+  await upload.done();
 }
 
 export async function deleteObject(key: string): Promise<void> {
