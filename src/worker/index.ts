@@ -1,3 +1,10 @@
+// Load .env.local before anything imports getEnv. tsx watch's hot-reload
+// re-runs this file but does NOT re-spawn the outer dotenv-cli wrapper, so
+// the env must be loaded inside the worker process itself for reloads to
+// continue working.
+import { loadEnvConfig } from "@next/env";
+loadEnvConfig(process.cwd(), true);
+
 import { Worker } from "bullmq";
 import { getEnv } from "@/lib/env";
 import { logger } from "@/lib/logger";
