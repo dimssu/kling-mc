@@ -17,6 +17,11 @@ const schema = z.object({
   S3_ACCESS_KEY: z.string().min(1),
   S3_SECRET_KEY: z.string().min(1),
   S3_PUBLIC_URL_BASE: z.string().url(),
+  // Optional: public-internet hostname for the same MinIO/S3 — used only when
+  // generating presigned URLs we hand to external services like Kling.
+  // For local dev set this to the URL of your tunnel (cloudflared / ssh -R)
+  // pointing at localhost:9000. Leave blank to use S3_ENDPOINT directly.
+  S3_PUBLIC_ENDPOINT: z.string().url().optional().or(z.literal("")).default(""),
   S3_FORCE_PATH_STYLE: z
     .string()
     .default("true")

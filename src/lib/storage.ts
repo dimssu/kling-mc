@@ -95,11 +95,25 @@ export async function getPresignedDownloadUrl(
   expiresInSec = 3600,
 ): Promise<string> {
   const env = getEnv();
-  return getSignedUrl(
+  const url = await getSignedUrl(
     client(),
     new GetObjectCommand({ Bucket: env.S3_BUCKET, Key: key }),
     { expiresIn: expiresInSec },
   );
+  // If a public endpoint is configured (e.g. a cloudflared tunnel for local
+  // dev), rewrite the URL's origin so external services can fetch it. The
+  // signed query string remains valid because S3 SigV4 signs the path + query,
+  // not the host.
+  if (!env.S3_PUBLIC_ENDPOINT) return url;
+  try {
+    const parsed = new URL(url);
+    const publicBase = new URL(env.S3_PUBLIC_ENDPOINT);
+    parsed.protocol = publicBase.protocol;
+    parsed.host = publicBase.host;
+    return parsed.toString();
+  } catch {
+    return url;
+  }
 }
 
 export function getPublicUrl(key: string): string {
