@@ -19,7 +19,12 @@
     "db:deploy": "dotenv -e .env.local -- prisma migrate deploy",
     "infra:up": "docker compose -f docker-compose.dev.yml up -d",
     "infra:down": "docker compose -f docker-compose.dev.yml down",
-    "infra:logs": "docker compose -f docker-compose.dev.yml logs -f"
+    "infra:logs": "docker compose -f docker-compose.dev.yml logs -f",
+    "app:start": "bash scripts/start.sh",
+    "app:stop": "bash scripts/stop.sh",
+    "app:status": "bash scripts/status.sh",
+    "app:restart": "bash scripts/stop.sh && bash scripts/start.sh",
+    "app:logs": "tail -f .run/logs/*.log"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1042.0",
