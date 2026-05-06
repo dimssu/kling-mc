@@ -7,11 +7,25 @@ const GenerationSchema = new Schema(
     ownerId: { type: String, required: true },
     status: { type: String, required: true }, // queued | processing | completed | failed
     provider: { type: String, default: "kling_official" },
-    providerTaskId: { type: String, default: null, index: { unique: true, sparse: true } },
+    providerTaskId: {
+      type: String,
+      default: null,
+      index: {
+        unique: true,
+        partialFilterExpression: { providerTaskId: { $type: "string" } },
+      },
+    },
     externalTaskId: { type: String, required: true, index: { unique: true } },
     sourceVideoId: { type: String, required: true },
     referenceImageId: { type: String, required: true },
-    outputAssetId: { type: String, default: null, index: { unique: true, sparse: true } },
+    outputAssetId: {
+      type: String,
+      default: null,
+      index: {
+        unique: true,
+        partialFilterExpression: { outputAssetId: { $type: "string" } },
+      },
+    },
     prompt: { type: String, default: null },
     modelName: { type: String, required: true },
     mode: { type: String, required: true },

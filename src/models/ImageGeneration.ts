@@ -7,14 +7,28 @@ const ImageGenerationSchema = new Schema(
     ownerId: { type: String, required: true },
     status: { type: String, required: true },
     provider: { type: String, default: "kling_official" },
-    providerTaskId: { type: String, default: null, index: { unique: true, sparse: true } },
+    providerTaskId: {
+      type: String,
+      default: null,
+      index: {
+        unique: true,
+        partialFilterExpression: { providerTaskId: { $type: "string" } },
+      },
+    },
     externalTaskId: { type: String, required: true, index: { unique: true } },
     endpoint: { type: String, default: "multi-image2image" },
 
     subjectImageIds: { type: [String], default: [] },
     sceneImageId: { type: String, default: null },
     styleImageId: { type: String, default: null },
-    outputAssetId: { type: String, default: null, index: { unique: true, sparse: true } },
+    outputAssetId: {
+      type: String,
+      default: null,
+      index: {
+        unique: true,
+        partialFilterExpression: { outputAssetId: { $type: "string" } },
+      },
+    },
 
     prompt: { type: String, default: null },
     negativePrompt: { type: String, default: null },

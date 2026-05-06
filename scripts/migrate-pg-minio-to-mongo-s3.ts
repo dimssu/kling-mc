@@ -78,6 +78,18 @@ async function main() {
   console.log("→ Connecting to MongoDB");
   await connectMongo();
 
+  // Reconcile indexes against the current schema. If a previous (failed) run
+  // created sparse-unique indexes that the new schema replaces with
+  // partialFilterExpression ones, syncIndexes drops the old + adds the new.
+  // Non-destructive — no document data is touched.
+  console.log("→ Syncing indexes against current schema");
+  await Promise.all([
+    MediaAsset.syncIndexes(),
+    Generation.syncIndexes(),
+    ImageGeneration.syncIndexes(),
+    ImageCarousel.syncIndexes(),
+  ]);
+
   console.log("→ Connecting to new AWS S3");
   const newS3 = new S3Client({
     region: env.S3_REGION,
