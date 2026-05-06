@@ -115,6 +115,36 @@ export type CarouselSlide = ImageGeneration & {
   poseLabel: string | null;
 };
 
+export type VideoGeneration = {
+  id: string;
+  ownerId: string;
+  status: "queued" | "processing" | "completed" | "failed";
+  provider: string;
+  providerTaskId: string | null;
+  externalTaskId: string;
+  referenceImageIds: string[];
+  outputAssetId: string | null;
+  prompt: string | null;
+  negativePrompt: string | null;
+  modelName: string;
+  mode: string;
+  duration: string;
+  aspectRatio: string;
+  watermarkEnabled: boolean;
+  estimatedCostUsd: string | number;
+  actualCostUsd: string | number | null;
+  finalUnitDeduction: string | null;
+  errorCode: number | null;
+  errorMessage: string | null;
+  isFavorite: boolean;
+  createdAt: string;
+  updatedAt: string;
+  submittedAt: string | null;
+  completedAt: string | null;
+  referenceImages?: Array<MediaAsset | null>;
+  outputAsset?: MediaAsset | null;
+} & CaptionPackFields;
+
 export type Carousel = {
   id: string;
   ownerId: string;
@@ -250,6 +280,38 @@ export const api = {
   toggleImageGenerationFavorite: (id: string, value?: boolean) =>
     request<{ imageGeneration: ImageGeneration }>(
       `/api/image-generations/${id}/favorite`,
+      { method: "POST", body: JSON.stringify({ value }) },
+    ),
+  createVideoGeneration: (input: {
+    imageIds: string[];
+    prompt: string;
+    negativePrompt?: string;
+    modelName?: "kling-v1-6";
+    mode?: "std" | "pro";
+    duration?: "5" | "10";
+    aspectRatio?: "16:9" | "9:16" | "1:1";
+    watermarkEnabled?: boolean;
+    captionPackEnabled?: boolean;
+  }) =>
+    request<{ videoGeneration: VideoGeneration }>("/api/video-generations", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  listVideoGenerations: (params: { status?: string; favorite?: boolean } = {}) => {
+    const sp = new URLSearchParams();
+    if (params.status) sp.set("status", params.status);
+    if (params.favorite) sp.set("favorite", "true");
+    return request<{ items: VideoGeneration[]; nextCursor: string | null }>(
+      `/api/video-generations?${sp}`,
+    );
+  },
+  getVideoGeneration: (id: string) =>
+    request<{ videoGeneration: VideoGeneration }>(`/api/video-generations/${id}`),
+  deleteVideoGeneration: (id: string) =>
+    request<{ ok: true }>(`/api/video-generations/${id}`, { method: "DELETE" }),
+  toggleVideoGenerationFavorite: (id: string, value?: boolean) =>
+    request<{ videoGeneration: VideoGeneration }>(
+      `/api/video-generations/${id}/favorite`,
       { method: "POST", body: JSON.stringify({ value }) },
     ),
   getUsage: () => request<UsageSummary>("/api/usage"),

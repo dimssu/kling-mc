@@ -9,6 +9,7 @@ import type {
   KlingProvider,
   KlingTaskStatus,
   MotionControlInput,
+  MultiImage2VideoInput,
   SingleImage2ImageInput,
   TaskQueryResult,
 } from "./types";
@@ -194,6 +195,60 @@ class OfficialKlingProvider implements KlingProvider {
       `${IMAGE_GENERATIONS_PATH}/${encodeURIComponent(taskId)}`,
     );
     return mapImageQuery(data);
+  }
+
+  async createMultiImage2VideoTask(
+    input: MultiImage2VideoInput,
+  ): Promise<CreateTaskResult> {
+    if (input.imageUrls.length === 0 || input.imageUrls.length > 4) {
+      throw new Error("imageUrls must contain between 1 and 4 entries");
+    }
+    const body: Record<string, unknown> = {
+      model_name: input.modelName,
+      image_list: input.imageUrls.map((u) => ({ image: u })),
+      prompt: input.prompt,
+      mode: input.mode,
+      duration: input.duration,
+      aspect_ratio: input.aspectRatio,
+      external_task_id: input.externalTaskId,
+    };
+    if (input.negativePrompt) body.negative_prompt = input.negativePrompt;
+    if (input.watermarkEnabled) body.watermark_info = { enabled: true };
+    if (input.callbackUrl) body.callback_url = input.callbackUrl;
+
+    const data = await this.request<CreateData>(
+      "POST",
+      "/v1/videos/multi-image2video",
+      body,
+    );
+
+    return {
+      providerTaskId: data.task_id,
+      status: data.task_status,
+      rawPayload: data,
+    };
+  }
+
+  async getMultiImage2VideoTask(taskId: string): Promise<TaskQueryResult> {
+    const data = await this.request<QueryData>(
+      "GET",
+      `/v1/videos/multi-image2video/${encodeURIComponent(taskId)}`,
+    );
+    const firstVideo = data.task_result?.videos?.[0];
+    return {
+      providerTaskId: data.task_id,
+      externalTaskId: data.task_info?.external_task_id ?? null,
+      status: data.task_status,
+      statusMessage: data.task_status_msg ?? null,
+      videoUrl: firstVideo?.url ?? null,
+      watermarkVideoUrl: firstVideo?.watermark_url ?? null,
+      videoDurationSec:
+        firstVideo?.duration != null && Number.isFinite(Number(firstVideo.duration))
+          ? Number(firstVideo.duration)
+          : null,
+      finalUnitDeduction: data.final_unit_deduction ?? null,
+      rawPayload: data,
+    };
   }
 
   private async request<T>(

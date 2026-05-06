@@ -197,3 +197,17 @@ export const createCarouselSchema = z
   );
 
 export type CreateCarouselInput = z.infer<typeof createCarouselSchema>;
+
+export const createVideoGenerationSchema = z.object({
+  imageIds: z.array(z.string().min(1)).min(1).max(4),
+  prompt: z.string().min(1).max(2500),
+  negativePrompt: z.string().max(2500).optional(),
+  modelName: z.enum(["kling-v1-6"]).default("kling-v1-6"),
+  mode: z.enum(["std", "pro"]).default("std"),
+  duration: z.enum(["5", "10"]).default("5"),
+  aspectRatio: z.enum(["16:9", "9:16", "1:1"]).default("16:9"),
+  watermarkEnabled: z.boolean().default(false),
+  captionPackEnabled: z.boolean().default(false),
+});
+
+export type CreateVideoGenerationInput = z.infer<typeof createVideoGenerationSchema>;

@@ -4,6 +4,7 @@ import * as React from "react";
 import { CreateGenerationForm } from "@/components/CreateGenerationForm";
 import { CreateImageGenerationForm } from "@/components/CreateImageGenerationForm";
 import { CreateCarouselForm } from "@/components/CreateCarouselForm";
+import { CreateVideoFromImagesForm } from "@/components/CreateVideoFromImagesForm";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 
 export default function CreatePage() {
@@ -25,6 +26,7 @@ export default function CreatePage() {
           <TabsTrigger value="video">Motion control (video)</TabsTrigger>
           <TabsTrigger value="image">Image (image-to-image)</TabsTrigger>
           <TabsTrigger value="carousel">Carousel</TabsTrigger>
+          <TabsTrigger value="image-to-video">Image to video</TabsTrigger>
         </TabsList>
         <TabsContent value="video">
           <p className="mb-4 max-w-prose text-sm text-[var(--color-fg-muted)]">
@@ -45,6 +47,13 @@ export default function CreatePage() {
             person and aesthetic, a different pose or expression on each slide.
           </p>
           <CreateCarouselForm />
+        </TabsContent>
+        <TabsContent value="image-to-video">
+          <p className="mb-4 max-w-prose text-sm text-[var(--color-fg-muted)]">
+            Generate a video from up to 4 reference images plus a prompt. Each image
+            is treated as an element/subject the model should weave into the scene.
+          </p>
+          <CreateVideoFromImagesForm />
         </TabsContent>
       </Tabs>
     </div>

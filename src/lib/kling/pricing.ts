@@ -69,6 +69,49 @@ export function pricingTable() {
   return RATE_USD_PER_5S;
 }
 
+// Multi-image-to-video uses kling-v1-6. Pricing here mirrors Kling's published
+// rates for image-to-video on v1-6 — this is a per-5-second figure and the
+// final deduction is reconciled on completion via finalUnitDeduction.
+import type {
+  KlingMultiImage2VideoMode,
+  KlingMultiImage2VideoModel,
+} from "./types";
+
+const MULTI_IMAGE_VIDEO_RATE_USD_PER_5S: Record<
+  KlingMultiImage2VideoModel,
+  Record<KlingMultiImage2VideoMode, number>
+> = {
+  "kling-v1-6": { std: 0.28, pro: 0.49 },
+};
+
+export function estimateMultiImage2VideoCostUsd(
+  model: KlingMultiImage2VideoModel,
+  mode: KlingMultiImage2VideoMode,
+  durationSec: number,
+): number {
+  const ratePer5s = MULTI_IMAGE_VIDEO_RATE_USD_PER_5S[model]?.[mode];
+  if (ratePer5s == null) return 0;
+  const seconds = Math.max(1, Math.round(durationSec));
+  return Number(((seconds / 5) * ratePer5s).toFixed(4));
+}
+
+export function multiImage2VideoDeductionToUsd(
+  model: KlingMultiImage2VideoModel,
+  mode: KlingMultiImage2VideoMode,
+  finalUnitDeduction: string | null | undefined,
+  fallbackDurationSec: number,
+): number | null {
+  const units = finalUnitDeduction == null ? NaN : Number(finalUnitDeduction);
+  if (!Number.isFinite(units)) {
+    return estimateMultiImage2VideoCostUsd(model, mode, fallbackDurationSec);
+  }
+  return estimateMultiImage2VideoCostUsd(model, mode, units);
+}
+
+export function multiImage2VideoPricingTable() {
+  return MULTI_IMAGE_VIDEO_RATE_USD_PER_5S;
+}
+
 export function imagePricingTable() {
   // Flatten the registry into a {model: rate} map keyed by primary endpoint
   // so callers that don't care about endpoint dispatch still get useful data.

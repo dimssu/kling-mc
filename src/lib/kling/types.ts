@@ -94,6 +94,26 @@ export type ImageTaskQueryResult = {
   rawPayload: unknown;
 };
 
+// /v1/videos/multi-image2video — generate a video from up to 4 reference images.
+export type KlingMultiImage2VideoModel = "kling-v1-6";
+export type KlingMultiImage2VideoMode = "std" | "pro";
+export type KlingMultiImage2VideoDuration = "5" | "10";
+export type KlingVideoAspectRatio = "16:9" | "9:16" | "1:1";
+
+export type MultiImage2VideoInput = {
+  modelName: KlingMultiImage2VideoModel;
+  mode: KlingMultiImage2VideoMode;
+  duration: KlingMultiImage2VideoDuration;
+  aspectRatio: KlingVideoAspectRatio;
+  // 1–4 reference images (URLs we hand Kling to fetch).
+  imageUrls: string[];
+  prompt: string;
+  negativePrompt?: string;
+  watermarkEnabled?: boolean;
+  callbackUrl?: string;
+  externalTaskId: string;
+};
+
 export interface KlingProvider {
   createMotionControlTask(input: MotionControlInput): Promise<CreateTaskResult>;
   getMotionControlTask(taskId: string): Promise<TaskQueryResult>;
@@ -101,4 +121,6 @@ export interface KlingProvider {
   getImageToImageTask(taskId: string): Promise<ImageTaskQueryResult>;
   createSingleImage2ImageTask(input: SingleImage2ImageInput): Promise<CreateTaskResult>;
   getSingleImage2ImageTask(taskId: string): Promise<ImageTaskQueryResult>;
+  createMultiImage2VideoTask(input: MultiImage2VideoInput): Promise<CreateTaskResult>;
+  getMultiImage2VideoTask(taskId: string): Promise<TaskQueryResult>;
 }

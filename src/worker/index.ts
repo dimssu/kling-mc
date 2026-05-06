@@ -13,25 +13,34 @@ import {
   MOTION_CONTROL_QUEUE,
   IMAGE_GEN_QUEUE,
   CAROUSEL_FINALIZE_QUEUE,
+  MULTI_IMAGE_VIDEO_QUEUE,
   getMotionControlQueue,
   getImageGenerationQueue,
+  getVideoGenerationQueue,
   getRedisConnection,
   type MotionControlJobData,
   type ImageGenerationJobData,
   type CarouselFinalizeJobData,
+  type VideoGenerationJobData,
 } from "@/lib/queue";
 import { connectMongo } from "@/lib/mongo";
-import { Generation, ImageGeneration } from "@/models";
+import { Generation, ImageGeneration, VideoGeneration } from "@/models";
 import { handleMotionControlJob } from "./handlers/motion-control";
 import { handleImageGenerationJob } from "./handlers/image-to-image";
 import { handleCarouselFinalizeJob } from "./handlers/carousel-finalize";
+import { handleMultiImageVideoJob } from "./handlers/multi-image-to-video";
 
 async function main() {
   const env = getEnv();
   await connectMongo();
   logger.info(
     {
-      queues: [MOTION_CONTROL_QUEUE, IMAGE_GEN_QUEUE, CAROUSEL_FINALIZE_QUEUE],
+      queues: [
+        MOTION_CONTROL_QUEUE,
+        IMAGE_GEN_QUEUE,
+        CAROUSEL_FINALIZE_QUEUE,
+        MULTI_IMAGE_VIDEO_QUEUE,
+      ],
       concurrency: env.MAX_CONCURRENT_GENERATIONS,
       kling: env.KLING_BASE_URL,
     },
@@ -76,7 +85,21 @@ async function main() {
     { connection: getRedisConnection(), concurrency: 2 },
   );
 
-  const workers = [motionWorker, imageWorker, carouselFinalizeWorker];
+  const videoFromImagesWorker = new Worker<VideoGenerationJobData>(
+    MULTI_IMAGE_VIDEO_QUEUE,
+    async (job) => {
+      const log = logger.child({
+        jobId: job.id,
+        videoGenerationId: job.data.videoGenerationId,
+      });
+      log.info("Picked up multi-image-to-video job");
+      await handleMultiImageVideoJob(job.data.videoGenerationId);
+      log.info("Multi-image-to-video job done");
+    },
+    { connection: getRedisConnection(), concurrency: env.MAX_CONCURRENT_GENERATIONS },
+  );
+
+  const workers = [motionWorker, imageWorker, carouselFinalizeWorker, videoFromImagesWorker];
 
   motionWorker.on("failed", (job, err) =>
     logger.error(
@@ -96,6 +119,16 @@ async function main() {
       "Carousel-finalize job failed",
     ),
   );
+  videoFromImagesWorker.on("failed", (job, err) =>
+    logger.error(
+      {
+        jobId: job?.id,
+        videoGenerationId: job?.data?.videoGenerationId,
+        err: err.message,
+      },
+      "Multi-image-to-video job failed",
+    ),
+  );
   for (const w of workers) {
     w.on("error", (err) => logger.error({ err: err.message }, "Worker error"));
   }
@@ -112,14 +145,24 @@ async function shutdown(workers: Worker[]): Promise<void> {
 }
 
 async function resumeOrphanedJobs(): Promise<void> {
-  const [motionOrphans, imageOrphans] = await Promise.all([
+  const [motionOrphans, imageOrphans, videoOrphans] = await Promise.all([
     Generation.find({ status: "processing" }).select({ _id: 1 }).lean(),
     ImageGeneration.find({ status: "processing" }).select({ _id: 1 }).lean(),
+    VideoGeneration.find({ status: "processing" }).select({ _id: 1 }).lean(),
   ]);
-  if (motionOrphans.length === 0 && imageOrphans.length === 0) return;
+  if (
+    motionOrphans.length === 0 &&
+    imageOrphans.length === 0 &&
+    videoOrphans.length === 0
+  )
+    return;
 
   logger.info(
-    { motionCount: motionOrphans.length, imageCount: imageOrphans.length },
+    {
+      motionCount: motionOrphans.length,
+      imageCount: imageOrphans.length,
+      videoCount: videoOrphans.length,
+    },
     "Re-enqueuing orphaned in-flight generations",
   );
 
@@ -142,6 +185,17 @@ async function resumeOrphanedJobs(): Promise<void> {
         "image-to-image",
         { imageGenerationId: id },
         { jobId: `resume-img-${id}-${Date.now()}` },
+      );
+    }
+  }
+  if (videoOrphans.length) {
+    const queue = getVideoGenerationQueue();
+    for (const o of videoOrphans) {
+      const id = String(o._id);
+      await queue.add(
+        "multi-image-to-video",
+        { videoGenerationId: id },
+        { jobId: `resume-vid-${id}-${Date.now()}` },
       );
     }
   }
