@@ -6,6 +6,7 @@ import { loadEnvConfig } from "@next/env";
 loadEnvConfig(process.cwd(), true);
 
 import { Worker } from "bullmq";
+import mongoose from "mongoose";
 import { getEnv } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import {
@@ -19,13 +20,15 @@ import {
   type ImageGenerationJobData,
   type CarouselFinalizeJobData,
 } from "@/lib/queue";
+import { connectMongo } from "@/lib/mongo";
+import { Generation, ImageGeneration } from "@/models";
 import { handleMotionControlJob } from "./handlers/motion-control";
 import { handleImageGenerationJob } from "./handlers/image-to-image";
 import { handleCarouselFinalizeJob } from "./handlers/carousel-finalize";
-import { prisma } from "@/lib/db";
 
 async function main() {
   const env = getEnv();
+  await connectMongo();
   logger.info(
     {
       queues: [MOTION_CONTROL_QUEUE, IMAGE_GEN_QUEUE, CAROUSEL_FINALIZE_QUEUE],
@@ -104,19 +107,15 @@ async function main() {
 async function shutdown(workers: Worker[]): Promise<void> {
   logger.info("Shutting down workers");
   await Promise.all(workers.map((w) => w.close()));
-  await prisma.$disconnect();
+  await mongoose.disconnect();
   process.exit(0);
 }
 
 async function resumeOrphanedJobs(): Promise<void> {
-  const motionOrphans = await prisma.generation.findMany({
-    where: { status: "processing" },
-    select: { id: true },
-  });
-  const imageOrphans = await prisma.imageGeneration.findMany({
-    where: { status: "processing" },
-    select: { id: true },
-  });
+  const [motionOrphans, imageOrphans] = await Promise.all([
+    Generation.find({ status: "processing" }).select({ _id: 1 }).lean(),
+    ImageGeneration.find({ status: "processing" }).select({ _id: 1 }).lean(),
+  ]);
   if (motionOrphans.length === 0 && imageOrphans.length === 0) return;
 
   logger.info(
@@ -127,20 +126,22 @@ async function resumeOrphanedJobs(): Promise<void> {
   if (motionOrphans.length) {
     const queue = getMotionControlQueue();
     for (const o of motionOrphans) {
+      const id = String(o._id);
       await queue.add(
         "motion-control",
-        { generationId: o.id },
-        { jobId: `resume-${o.id}-${Date.now()}` },
+        { generationId: id },
+        { jobId: `resume-${id}-${Date.now()}` },
       );
     }
   }
   if (imageOrphans.length) {
     const queue = getImageGenerationQueue();
     for (const o of imageOrphans) {
+      const id = String(o._id);
       await queue.add(
         "image-to-image",
-        { imageGenerationId: o.id },
-        { jobId: `resume-img-${o.id}-${Date.now()}` },
+        { imageGenerationId: id },
+        { jobId: `resume-img-${id}-${Date.now()}` },
       );
     }
   }

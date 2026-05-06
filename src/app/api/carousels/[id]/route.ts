@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
+import { connectMongo } from "@/lib/mongo";
+import { ImageCarousel, ImageGeneration, MediaAsset } from "@/models";
 import { getEnv } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { getCarouselFinalizeQueue } from "@/lib/queue";
 import { deleteObject } from "@/lib/storage";
+import { toApi } from "@/lib/serialize";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,105 +27,94 @@ function deriveStatus(slideStatuses: SlideStatus[]): string {
 }
 
 export async function GET(_req: Request, ctx: Ctx) {
+  await connectMongo();
   const env = getEnv();
   const { id } = await ctx.params;
 
-  const carousel = await prisma.imageCarousel.findUnique({
-    where: { id },
-    include: {
-      slides: {
-        orderBy: { slotIndex: "asc" },
-        include: { outputAsset: true },
-      },
-    },
-  });
+  const carousel = await ImageCarousel.findById(id).lean();
   if (!carousel || carousel.ownerId !== env.DEFAULT_USER_ID) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  // Resolve the subject MediaAsset for the UI (parent-level reference). Same
-  // pattern as ImageGeneration's subjectImageIds — stored as plain string,
-  // resolved on read.
-  const subjectImage = await prisma.mediaAsset.findUnique({
-    where: { id: carousel.subjectImageId },
-  });
+  const slides = await ImageGeneration.find({ carouselId: id })
+    .sort({ slotIndex: 1 })
+    .lean();
+  const outputIds = slides.map((s) => s.outputAssetId).filter((x): x is string => !!x);
+  const outputs = outputIds.length
+    ? await MediaAsset.find({ _id: { $in: outputIds } }).lean()
+    : [];
+  const outputMap = new Map(outputs.map((a) => [String(a._id), a]));
 
-  const derived = deriveStatus(carousel.slides.map((s) => s.status));
+  const subjectImage = await MediaAsset.findById(carousel.subjectImageId).lean();
 
-  // Persist the derived status idempotently so list views don't have to
-  // re-derive. Skip the write if it's already in sync.
+  const derived = deriveStatus(slides.map((s) => s.status));
+
+  // Persist the derived status idempotently so list views don't have to re-derive.
   let nextCarousel = carousel;
   if (derived !== carousel.status) {
-    nextCarousel = await prisma.imageCarousel.update({
-      where: { id: carousel.id },
-      data: { status: derived },
-      include: {
-        slides: {
-          orderBy: { slotIndex: "asc" },
-          include: { outputAsset: true },
-        },
-      },
-    });
+    nextCarousel = (await ImageCarousel.findByIdAndUpdate(
+      id,
+      { $set: { status: derived } },
+      { new: true, lean: true },
+    ))!;
   }
 
-  // Trigger the unified caption job once all slides reach a terminal state
-  // and we don't yet have a caption. The handler is idempotent.
+  // Trigger the unified caption job once all slides reach a terminal state.
   const allTerminal =
-    nextCarousel.slides.length > 0 &&
-    nextCarousel.slides.every(
-      (s) => s.status === "completed" || s.status === "failed",
-    );
-  const anyCompleted = nextCarousel.slides.some((s) => s.status === "completed");
+    slides.length > 0 && slides.every((s) => s.status === "completed" || s.status === "failed");
+  const anyCompleted = slides.some((s) => s.status === "completed");
   if (allTerminal && anyCompleted && !nextCarousel.caption) {
     try {
       const queue = getCarouselFinalizeQueue();
       await queue.add(
         "carousel-finalize",
-        { carouselId: nextCarousel.id },
-        // Stable jobId so repeated GETs don't fan out duplicate finalize jobs.
-        { jobId: `finalize-${nextCarousel.id}` },
+        { carouselId: id },
+        { jobId: `finalize-${id}` },
       );
     } catch (err) {
       logger.warn(
-        { err: err instanceof Error ? err.message : err, carouselId: nextCarousel.id },
+        { err: err instanceof Error ? err.message : err, carouselId: id },
         "Failed to enqueue carousel-finalize (non-fatal — next GET will retry)",
       );
     }
   }
 
-  return NextResponse.json({ carousel: { ...nextCarousel, subjectImage } });
+  const enrichedSlides = slides.map((s) => ({
+    ...s,
+    outputAsset: s.outputAssetId ? (outputMap.get(s.outputAssetId) ?? null) : null,
+  }));
+
+  return NextResponse.json({
+    carousel: toApi({
+      ...nextCarousel,
+      slides: enrichedSlides,
+      subjectImage,
+    }),
+  });
 }
 
 export async function DELETE(_req: Request, ctx: Ctx) {
+  await connectMongo();
   const env = getEnv();
   const { id } = await ctx.params;
 
-  const carousel = await prisma.imageCarousel.findUnique({
-    where: { id },
-    include: {
-      slides: { include: { outputAsset: true } },
-    },
-  });
+  const carousel = await ImageCarousel.findById(id).lean();
   if (!carousel || carousel.ownerId !== env.DEFAULT_USER_ID) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  // Collect output assets before delete; ImageGeneration has @relation
-  // onDelete: Cascade from the carousel side, so children disappear with the
-  // parent, but their output MediaAssets are linked via outputAssetId (no
-  // cascade) and need explicit cleanup.
-  const outputs = carousel.slides
-    .map((s) => s.outputAsset)
-    .filter((a): a is NonNullable<typeof a> => !!a);
+  const slides = await ImageGeneration.find({ carouselId: id }).lean();
+  const outputIds = slides.map((s) => s.outputAssetId).filter((x): x is string => !!x);
+  const outputs = outputIds.length
+    ? await MediaAsset.find({ _id: { $in: outputIds } }).lean()
+    : [];
 
-  await prisma.$transaction(async (tx) => {
-    await tx.imageCarousel.delete({ where: { id } });
-    if (outputs.length) {
-      await tx.mediaAsset.deleteMany({
-        where: { id: { in: outputs.map((a) => a.id) } },
-      });
-    }
-  });
+  // Delete carousel + all child slides + all output media assets.
+  await ImageCarousel.deleteOne({ _id: id });
+  await ImageGeneration.deleteMany({ carouselId: id });
+  if (outputIds.length) {
+    await MediaAsset.deleteMany({ _id: { $in: outputIds } });
+  }
 
   for (const a of outputs) {
     try {

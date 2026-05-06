@@ -1,19 +1,13 @@
-import { prisma } from "@/lib/db";
+import { connectMongo } from "@/lib/mongo";
+import { ImageCarousel, ImageGeneration } from "@/models";
 import { logger } from "@/lib/logger";
 import { generateCarouselCaptionPack, isLlmConfigured } from "@/lib/gemini";
 
 export async function handleCarouselFinalizeJob(carouselId: string): Promise<void> {
+  await connectMongo();
   const log = logger.child({ carouselId });
 
-  const carousel = await prisma.imageCarousel.findUnique({
-    where: { id: carouselId },
-    include: {
-      slides: {
-        orderBy: { slotIndex: "asc" },
-      },
-    },
-  });
-
+  const carousel = await ImageCarousel.findById(carouselId).lean();
   if (!carousel) {
     log.warn("Carousel not found — skipping finalize");
     return;
@@ -24,9 +18,12 @@ export async function handleCarouselFinalizeJob(carouselId: string): Promise<voi
     return;
   }
 
-  // Caption pack only makes sense once every slide is terminal. If anything
-  // is still in flight, bail; the GET route will re-enqueue when it flips.
-  const terminal = carousel.slides.every(
+  const slides = await ImageGeneration.find({ carouselId })
+    .sort({ slotIndex: 1 })
+    .lean();
+
+  // Caption pack only makes sense once every slide is terminal.
+  const terminal = slides.every(
     (s) => s.status === "completed" || s.status === "failed",
   );
   if (!terminal) {
@@ -34,25 +31,25 @@ export async function handleCarouselFinalizeJob(carouselId: string): Promise<voi
     return;
   }
 
-  const completedSlides = carousel.slides.filter((s) => s.status === "completed");
+  const completedSlides = slides.filter((s) => s.status === "completed");
   if (completedSlides.length === 0) {
     log.info("No completed slides — marking carousel failed");
-    await prisma.imageCarousel.update({
-      where: { id: carouselId },
-      data: { status: "failed", completedAt: new Date() },
-    });
+    await ImageCarousel.updateOne(
+      { _id: carouselId },
+      { $set: { status: "failed", completedAt: new Date() } },
+    );
     return;
   }
 
+  const finalStatus =
+    completedSlides.length === slides.length ? "completed" : "partial";
+
   if (!isLlmConfigured()) {
     log.warn("LLM not configured — marking carousel complete without caption");
-    await prisma.imageCarousel.update({
-      where: { id: carouselId },
-      data: {
-        status: completedSlides.length === carousel.slides.length ? "completed" : "partial",
-        completedAt: new Date(),
-      },
-    });
+    await ImageCarousel.updateOne(
+      { _id: carouselId },
+      { $set: { status: finalStatus, completedAt: new Date() } },
+    );
     return;
   }
 
@@ -67,31 +64,29 @@ export async function handleCarouselFinalizeJob(carouselId: string): Promise<voi
       facts: { aspectRatio: carousel.aspectRatio, n: carousel.n },
     });
 
-    await prisma.imageCarousel.update({
-      where: { id: carouselId },
-      data: {
-        caption: pack.caption,
-        captionTags: pack.tags,
-        captionLocation: pack.location,
-        captionAccessibility: pack.accessibilityText,
-        captionGeneratedAt: new Date(),
-        status: completedSlides.length === carousel.slides.length ? "completed" : "partial",
-        completedAt: new Date(),
+    await ImageCarousel.updateOne(
+      { _id: carouselId },
+      {
+        $set: {
+          caption: pack.caption,
+          captionTags: pack.tags,
+          captionLocation: pack.location,
+          captionAccessibility: pack.accessibilityText,
+          captionGeneratedAt: new Date(),
+          status: finalStatus,
+          completedAt: new Date(),
+        },
       },
-    });
+    );
     log.info("Carousel caption pack saved");
   } catch (err) {
     log.warn(
       { err: err instanceof Error ? err.message : String(err) },
       "Carousel caption generation failed (non-fatal)",
     );
-    // Still mark the carousel terminal so the UI doesn't spin forever.
-    await prisma.imageCarousel.update({
-      where: { id: carouselId },
-      data: {
-        status: completedSlides.length === carousel.slides.length ? "completed" : "partial",
-        completedAt: new Date(),
-      },
-    });
+    await ImageCarousel.updateOne(
+      { _id: carouselId },
+      { $set: { status: finalStatus, completedAt: new Date() } },
+    );
   }
 }

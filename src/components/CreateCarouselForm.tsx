@@ -63,6 +63,7 @@ export function CreateCarouselForm() {
   React.useEffect(() => {
     if (!MODEL_PRICES[endpoint][modelName]) {
       const first = Object.keys(MODEL_PRICES[endpoint])[0] as Model | undefined;
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       if (first) setModelName(first);
     }
   }, [endpoint, modelName]);

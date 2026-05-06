@@ -1,7 +1,6 @@
-import { extname } from "node:path";
 import type { Logger } from "pino";
-import { Decimal, type InputJsonValue } from "@/generated/prisma/runtime/library";
-import { prisma } from "@/lib/db";
+import { connectMongo } from "@/lib/mongo";
+import { Generation, MediaAsset } from "@/models";
 import { logger } from "@/lib/logger";
 import { getKlingProvider } from "@/lib/kling";
 import { KlingApiError } from "@/lib/kling/errors";
@@ -10,6 +9,7 @@ import {
   downloadToBuffer,
   getKlingFetchUrl,
   getPublicUrl,
+  makeOutputKey,
   uploadObject,
 } from "@/lib/storage";
 import { probeMedia } from "@/lib/media-probe";
@@ -26,15 +26,24 @@ const POLL_PHASES: Array<{ untilSec: number; intervalMs: number }> = [
 const HARD_TIMEOUT_MS = 20 * 60 * 1000;
 
 export async function handleMotionControlJob(generationId: string): Promise<void> {
+  await connectMongo();
   const log = logger.child({ generationId });
-  const generation = await prisma.generation.findUniqueOrThrow({
-    where: { id: generationId },
-    include: { sourceVideo: true, referenceImage: true },
-  });
+  const generation = await Generation.findById(generationId).lean();
+  if (!generation) {
+    throw new Error(`Generation ${generationId} not found`);
+  }
 
   if (generation.status === "completed" || generation.status === "failed") {
     log.info({ status: generation.status }, "Skipping job — already terminal");
     return;
+  }
+
+  const [sourceVideo, referenceImage] = await Promise.all([
+    MediaAsset.findById(generation.sourceVideoId).lean(),
+    MediaAsset.findById(generation.referenceImageId).lean(),
+  ]);
+  if (!sourceVideo || !referenceImage) {
+    throw new Error(`Missing source/reference asset for generation ${generationId}`);
   }
 
   const env = getEnv();
@@ -43,15 +52,15 @@ export async function handleMotionControlJob(generationId: string): Promise<void
   let providerTaskId = generation.providerTaskId;
 
   if (!providerTaskId) {
-    const sourceUrl = getKlingFetchUrl(generation.sourceVideo.storageKey);
-    const referenceUrl = getKlingFetchUrl(generation.referenceImage.storageKey);
+    const sourceUrl = getKlingFetchUrl(sourceVideo.storageKey);
+    const referenceUrl = getKlingFetchUrl(referenceImage.storageKey);
     log.info({ sourceUrl, referenceUrl }, "Resolved fetch URLs for Kling");
 
     const callbackUrl =
       env.ENABLE_KLING_WEBHOOKS && env.WEBHOOK_SECRET
         ? `${env.APP_BASE_URL.replace(/\/+$/, "")}/api/webhooks/kling?gid=${encodeURIComponent(
-            generation.id,
-          )}&sig=${signGid(generation.id)}`
+            generation._id,
+          )}&sig=${signGid(generation._id)}`
         : undefined;
 
     log.info("Creating Kling task");
@@ -70,26 +79,28 @@ export async function handleMotionControlJob(generationId: string): Promise<void
       });
 
       providerTaskId = result.providerTaskId;
-      await prisma.generation.update({
-        where: { id: generation.id },
-        data: {
-          providerTaskId,
-          status: "processing",
-          submittedAt: new Date(),
+      await Generation.updateOne(
+        { _id: generation._id },
+        {
+          $set: {
+            providerTaskId,
+            status: "processing",
+            submittedAt: new Date(),
+          },
         },
-      });
+      );
       log.info({ providerTaskId }, "Kling task created");
     } catch (err) {
       const retryable = err instanceof KlingApiError && err.retryable;
       if (!retryable) {
-        await markFailed(generation.id, err);
+        await markFailed(generation._id, err);
         return;
       }
       throw err;
     }
   }
 
-  await pollUntilTerminal(generation.id, providerTaskId, log);
+  await pollUntilTerminal(generation._id, providerTaskId, log);
 }
 
 async function pollUntilTerminal(
@@ -123,15 +134,17 @@ async function pollUntilTerminal(
     }
 
     if (result.status === "failed") {
-      await prisma.generation.update({
-        where: { id: generationId },
-        data: {
-          status: "failed",
-          errorMessage: result.statusMessage ?? "Generation failed",
-          completedAt: new Date(),
-          rawProviderPayload: toJsonValue(result.rawPayload),
+      await Generation.updateOne(
+        { _id: generationId },
+        {
+          $set: {
+            status: "failed",
+            errorMessage: result.statusMessage ?? "Generation failed",
+            completedAt: new Date(),
+            rawProviderPayload: result.rawPayload ?? null,
+          },
         },
-      });
+      );
       log.warn({ statusMessage: result.statusMessage }, "Kling reported failure");
       return;
     }
@@ -139,14 +152,16 @@ async function pollUntilTerminal(
     await sleep(phase.intervalMs);
   }
 
-  await prisma.generation.update({
-    where: { id: generationId },
-    data: {
-      status: "failed",
-      errorMessage: "Polling timeout exceeded (20 minutes)",
-      completedAt: new Date(),
+  await Generation.updateOne(
+    { _id: generationId },
+    {
+      $set: {
+        status: "failed",
+        errorMessage: "Polling timeout exceeded (20 minutes)",
+        completedAt: new Date(),
+      },
     },
-  });
+  );
   log.error("Polling timed out");
 }
 
@@ -156,21 +171,22 @@ async function finalizeSuccess(
   log: Logger,
 ): Promise<void> {
   if (!result.videoUrl) {
-    await prisma.generation.update({
-      where: { id: generationId },
-      data: {
-        status: "failed",
-        errorMessage: "Provider returned succeed without a video URL",
-        completedAt: new Date(),
-        rawProviderPayload: toJsonValue(result.rawPayload),
+    await Generation.updateOne(
+      { _id: generationId },
+      {
+        $set: {
+          status: "failed",
+          errorMessage: "Provider returned succeed without a video URL",
+          completedAt: new Date(),
+          rawProviderPayload: result.rawPayload ?? null,
+        },
       },
-    });
+    );
     return;
   }
 
-  const generation = await prisma.generation.findUniqueOrThrow({
-    where: { id: generationId },
-  });
+  const generation = await Generation.findById(generationId).lean();
+  if (!generation) return;
 
   // Race-dedup: if another worker already finalized this generation, bail before
   // we re-download + re-upload.
@@ -183,7 +199,7 @@ async function finalizeSuccess(
   const { buffer, contentType } = await downloadToBuffer(result.videoUrl);
 
   const ext = guessVideoExt(contentType);
-  const storageKey = `generations/${generation.ownerId}/${generation.id}.${ext}`;
+  const storageKey = makeOutputKey(generation.ownerId, generation._id, ext);
   await uploadObject({
     key: storageKey,
     body: buffer,
@@ -211,50 +227,43 @@ async function finalizeSuccess(
     finalDuration ?? 5,
   );
 
-  // Conditional update: only the worker that flips status from non-completed to
-  // completed wins. Use $transaction so the MediaAsset insert is rolled back if
-  // we lose the race.
-  await prisma.$transaction(async (tx) => {
-    const outputAsset = await tx.mediaAsset.create({
-      data: {
-        ownerId: generation.ownerId,
-        kind: "generated_video",
-        filename: `${generation.id}.${ext}`,
-        mimeType: contentType,
-        sizeBytes: buffer.length,
-        durationSec: finalDuration,
-        width: probe.width,
-        height: probe.height,
-        storageKey,
-      },
-    });
-    const updated = await tx.generation.updateMany({
-      where: { id: generationId, status: { not: "completed" } },
-      data: {
+  // Atomic conditional update: only the worker that flips status from
+  // non-completed to completed wins. If we lose, delete the orphan asset.
+  const outputAsset = await MediaAsset.create({
+    ownerId: generation.ownerId,
+    kind: "generated_video",
+    filename: `${generation._id}.${ext}`,
+    mimeType: contentType,
+    sizeBytes: buffer.length,
+    durationSec: finalDuration,
+    width: probe.width,
+    height: probe.height,
+    storageKey,
+  });
+
+  const won = await Generation.updateOne(
+    { _id: generationId, status: { $ne: "completed" } },
+    {
+      $set: {
         status: "completed",
-        outputAssetId: outputAsset.id,
+        outputAssetId: String(outputAsset._id),
         completedAt: new Date(),
         finalUnitDeduction: result.finalUnitDeduction,
-        actualCostUsd: actualCostUsd != null ? new Decimal(actualCostUsd) : null,
-        rawProviderPayload: toJsonValue(result.rawPayload),
+        actualCostUsd: actualCostUsd ?? null,
+        rawProviderPayload: result.rawPayload ?? null,
       },
-    });
-    if (updated.count === 0) {
-      // Lost the race — abort the transaction so the orphan MediaAsset rolls back.
-      throw new RaceLostError();
-    }
-  }).catch((err) => {
-    if (err instanceof RaceLostError) {
-      log.info("Lost finalize race; rolled back");
-      return;
-    }
-    throw err;
-  });
+    },
+  );
+
+  if (won.matchedCount === 0) {
+    log.info("Lost finalize race; rolling back orphan asset");
+    await MediaAsset.deleteOne({ _id: outputAsset._id });
+    return;
+  }
 
   log.info({ publicUrl: getPublicUrl(storageKey) }, "Generation completed");
 
-  // Caption pack: generate after the row is committed. Failures here are
-  // logged but never fail the job — the media is the primary deliverable.
+  // Caption pack: post-finalize, never fatal.
   if (generation.captionPackEnabled && isLlmConfigured()) {
     try {
       log.info("Generating caption pack");
@@ -263,16 +272,18 @@ async function finalizeSuccess(
         prompt: generation.prompt,
         facts: { durationSec: finalDuration },
       });
-      await prisma.generation.update({
-        where: { id: generationId },
-        data: {
-          caption: pack.caption,
-          captionTags: pack.tags,
-          captionLocation: pack.location,
-          captionAccessibility: pack.accessibilityText,
-          captionPackGeneratedAt: new Date(),
+      await Generation.updateOne(
+        { _id: generationId },
+        {
+          $set: {
+            caption: pack.caption,
+            captionTags: pack.tags,
+            captionLocation: pack.location,
+            captionAccessibility: pack.accessibilityText,
+            captionPackGeneratedAt: new Date(),
+          },
         },
-      });
+      );
       log.info("Caption pack saved");
     } catch (err) {
       log.warn(
@@ -283,22 +294,20 @@ async function finalizeSuccess(
   }
 }
 
-class RaceLostError extends Error {
-  constructor() { super("race-lost"); }
-}
-
 async function markFailed(generationId: string, err: unknown): Promise<void> {
   const message = err instanceof Error ? err.message : String(err);
   const code = err instanceof KlingApiError ? err.code : null;
-  await prisma.generation.update({
-    where: { id: generationId },
-    data: {
-      status: "failed",
-      errorMessage: message,
-      errorCode: code,
-      completedAt: new Date(),
+  await Generation.updateOne(
+    { _id: generationId },
+    {
+      $set: {
+        status: "failed",
+        errorMessage: message,
+        errorCode: code,
+        completedAt: new Date(),
+      },
     },
-  });
+  );
 }
 
 function guessVideoExt(contentType: string): string {
@@ -308,12 +317,6 @@ function guessVideoExt(contentType: string): string {
   return "mp4";
 }
 
-function toJsonValue(v: unknown): InputJsonValue {
-  return JSON.parse(JSON.stringify(v ?? null)) as InputJsonValue;
-}
-
 function sleep(ms: number): Promise<void> {
   return new Promise((res) => setTimeout(res, ms));
 }
-
-export { extname };

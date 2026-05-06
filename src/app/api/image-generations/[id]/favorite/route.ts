@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
+import { connectMongo } from "@/lib/mongo";
+import { ImageGeneration } from "@/models";
 import { getEnv } from "@/lib/env";
+import { toApi } from "@/lib/serialize";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -8,30 +10,26 @@ export const dynamic = "force-dynamic";
 type Ctx = { params: Promise<{ id: string }> };
 
 export async function POST(req: Request, ctx: Ctx) {
+  await connectMongo();
   const env = getEnv();
   const { id } = await ctx.params;
   const body = (await req.json().catch(() => ({}))) as { value?: boolean };
 
+  let updated;
   if (typeof body.value === "boolean") {
-    const updated = await prisma.imageGeneration.updateMany({
-      where: { id, ownerId: env.DEFAULT_USER_ID },
-      data: { isFavorite: body.value },
-    });
-    if (updated.count === 0) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
-    }
-  } else {
-    const result = await prisma.$executeRawUnsafe(
-      `UPDATE "ImageGeneration" SET "isFavorite" = NOT "isFavorite", "updatedAt" = NOW()
-       WHERE "id" = $1 AND "ownerId" = $2`,
-      id,
-      env.DEFAULT_USER_ID,
+    updated = await ImageGeneration.findOneAndUpdate(
+      { _id: id, ownerId: env.DEFAULT_USER_ID },
+      { $set: { isFavorite: body.value } },
+      { new: true, lean: true },
     );
-    if (result === 0) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
-    }
+  } else {
+    updated = await ImageGeneration.findOneAndUpdate(
+      { _id: id, ownerId: env.DEFAULT_USER_ID },
+      [{ $set: { isFavorite: { $not: "$isFavorite" } } }],
+      { new: true, lean: true },
+    );
   }
 
-  const imageGeneration = await prisma.imageGeneration.findUnique({ where: { id } });
-  return NextResponse.json({ imageGeneration });
+  if (!updated) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  return NextResponse.json({ imageGeneration: toApi(updated) });
 }

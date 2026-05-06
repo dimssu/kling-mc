@@ -12,11 +12,6 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "db:generate": "dotenv -e .env.local -- prisma generate",
-    "db:migrate": "dotenv -e .env.local -- prisma migrate dev",
-    "db:reset": "dotenv -e .env.local -- prisma migrate reset --force",
-    "db:studio": "dotenv -e .env.local -- prisma studio",
-    "db:deploy": "dotenv -e .env.local -- prisma migrate deploy",
     "infra:up": "docker compose -f docker-compose.dev.yml up -d",
     "infra:down": "docker compose -f docker-compose.dev.yml down",
     "infra:logs": "docker compose -f docker-compose.dev.yml logs -f",
@@ -24,7 +19,9 @@
     "app:stop": "bash scripts/stop.sh",
     "app:status": "bash scripts/status.sh",
     "app:restart": "bash scripts/stop.sh && bash scripts/start.sh",
-    "app:logs": "tail -f .run/logs/*.log"
+    "app:logs": "tail -f .run/logs/*.log",
+    "migrate:legacy": "dotenv -e .env.local -- tsx scripts/migrate-pg-minio-to-mongo-s3.ts",
+    "sync:gallery": "dotenv -e .env.local -- tsx scripts/sync-to-gallery.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1042.0",
@@ -33,7 +30,6 @@
     "@google/genai": "^1.52.0",
     "@hookform/resolvers": "^5.2.2",
     "@next/env": "^16.2.4",
-    "@prisma/client": "^6.19.3",
     "@radix-ui/react-dialog": "^1.1.15",
     "@radix-ui/react-label": "^2.1.8",
     "@radix-ui/react-progress": "^1.1.8",
@@ -51,7 +47,9 @@
     "ioredis": "^5.10.1",
     "jsonwebtoken": "^9.0.3",
     "lucide-react": "^1.14.0",
+    "mongoose": "^8.10.0",
     "next": "16.2.4",
+    "pg": "^8.13.0",
     "pino": "^10.3.1",
     "react": "19.2.4",
     "react-dom": "19.2.4",
@@ -67,13 +65,13 @@
     "@types/busboy": "^1.5.4",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^20",
+    "@types/pg": "^8.11.10",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "dotenv-cli": "^11.0.0",
     "eslint": "^9",
     "eslint-config-next": "16.2.4",
     "pino-pretty": "^13.1.3",
-    "prisma": "^6.19.3",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
     "typescript": "^5",
@@ -81,11 +79,8 @@
   },
   "pnpm": {
     "onlyBuiltDependencies": [
-      "@prisma/client",
-      "@prisma/engines",
       "esbuild",
-      "msgpackr-extract",
-      "prisma"
+      "msgpackr-extract"
     ]
   }
 }

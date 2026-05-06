@@ -5,10 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { prisma } from "@/lib/db";
+import { connectMongo } from "@/lib/mongo";
+import { MediaAsset } from "@/models";
 import { getEnv } from "@/lib/env";
 import { logger } from "@/lib/logger";
-import { uploadObjectStream } from "@/lib/storage";
+import { makeUploadKey, uploadObjectStream } from "@/lib/storage";
 import { parseMultipartToDisk } from "@/lib/multipart";
 import { sniffMime, extForMime } from "@/lib/mime-sniff";
 import {
@@ -19,6 +20,7 @@ import {
   SUPPORTED_IMAGE_TYPES,
   SUPPORTED_VIDEO_TYPES,
 } from "@/lib/validation";
+import { toApi } from "@/lib/serialize";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -26,9 +28,8 @@ export const dynamic = "force-dynamic";
 const kindSchema = z.enum(["source_video", "reference_image"]);
 
 export async function POST(req: Request) {
+  await connectMongo();
   const tmpPath = join(tmpdir(), `kmc-upload-${randomUUID()}`);
-  // Use the larger of the two limits as the initial cap; we'll re-check
-  // against the per-kind limit once we know what was uploaded.
   const initialCap = Math.max(IMAGE_LIMITS.maxSizeBytes, VIDEO_LIMITS.maxSizeBytes);
 
   let parsed;
@@ -69,7 +70,6 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Empty file" }, { status: 400 });
     }
 
-    // Per-kind size check
     const maxBytes =
       kind === "reference_image" ? IMAGE_LIMITS.maxSizeBytes : VIDEO_LIMITS.maxSizeBytes;
     if (tmpStat.size > maxBytes) {
@@ -82,7 +82,6 @@ export async function POST(req: Request) {
       );
     }
 
-    // Magic-byte sniff: first 12 bytes only
     const handle = await open(tmpPath, "r");
     let sniffed: ReturnType<typeof sniffMime>;
     try {
@@ -142,33 +141,29 @@ export async function POST(req: Request) {
     }
 
     const ext = extForMime(sniffed);
-    const id = randomUUID().replace(/-/g, "");
     const env = getEnv();
-    const storageKey = `uploads/${env.DEFAULT_USER_ID}/${kind}/${id}.${ext}`;
+    const storageKey = makeUploadKey(env.DEFAULT_USER_ID, kind, ext);
 
-    // Stream tmp file → S3 multipart. Memory stays bounded.
     await uploadObjectStream({
       key: storageKey,
       body: createReadStream(tmpPath),
       contentType: sniffed,
     });
 
-    const safeFilename = sanitizeFilename(parsed.file.filename) || `${id}.${ext}`;
-    const asset = await prisma.mediaAsset.create({
-      data: {
-        ownerId: env.DEFAULT_USER_ID,
-        kind,
-        filename: safeFilename,
-        mimeType: sniffed,
-        sizeBytes: tmpStat.size,
-        durationSec: probe?.durationSec ?? null,
-        width: probe?.width ?? null,
-        height: probe?.height ?? null,
-        storageKey,
-      },
+    const safeFilename = sanitizeFilename(parsed.file.filename) || `${randomUUID()}.${ext}`;
+    const asset = await MediaAsset.create({
+      ownerId: env.DEFAULT_USER_ID,
+      kind,
+      filename: safeFilename,
+      mimeType: sniffed,
+      sizeBytes: tmpStat.size,
+      durationSec: probe?.durationSec ?? null,
+      width: probe?.width ?? null,
+      height: probe?.height ?? null,
+      storageKey,
     });
 
-    return NextResponse.json({ asset });
+    return NextResponse.json({ asset: toApi(asset.toObject()) });
   } catch (err) {
     logger.error({ err: errMsg(err) }, "Upload failed");
     return NextResponse.json({ error: "Upload failed: " + errMsg(err) }, { status: 500 });

@@ -1,50 +1,80 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
+import { connectMongo } from "@/lib/mongo";
+import { ImageCarousel, ImageGeneration, MediaAsset } from "@/models";
 import { getEnv } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { getImageGenerationQueue } from "@/lib/queue";
 import { estimateImageCostUsd, type KlingImageModel } from "@/lib/kling/pricing";
 import { createCarouselSchema, validateImageFile } from "@/lib/validation";
 import { isLlmConfigured, suggestCarouselPosePrompts } from "@/lib/gemini";
-import { Decimal } from "@/generated/prisma/runtime/library";
+import { toApi } from "@/lib/serialize";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
+  await connectMongo();
   const env = getEnv();
   const url = new URL(req.url);
   const status = url.searchParams.get("status");
   const limit = Math.min(parseInt(url.searchParams.get("limit") ?? "50", 10) || 50, 200);
   const cursor = url.searchParams.get("cursor") ?? undefined;
 
-  const where = {
-    ownerId: env.DEFAULT_USER_ID,
-    ...(status ? { status } : {}),
-  };
+  const filter: Record<string, unknown> = { ownerId: env.DEFAULT_USER_ID };
+  if (status) filter.status = status;
 
-  const items = await prisma.imageCarousel.findMany({
-    where,
-    orderBy: { createdAt: "desc" },
-    take: limit + 1,
-    ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
-    include: {
-      slides: {
-        orderBy: { slotIndex: "asc" },
-        include: { outputAsset: true },
-      },
-    },
-  });
+  if (cursor) {
+    const cursorDoc = await ImageCarousel.findById(cursor).lean();
+    if (cursorDoc) {
+      filter.$or = [
+        { createdAt: { $lt: cursorDoc.createdAt } },
+        { createdAt: cursorDoc.createdAt, _id: { $lt: cursor } },
+      ];
+    }
+  }
+
+  const items = await ImageCarousel.find(filter)
+    .sort({ createdAt: -1, _id: -1 })
+    .limit(limit + 1)
+    .lean();
 
   const hasMore = items.length > limit;
   const trimmed = hasMore ? items.slice(0, limit) : items;
-  const nextCursor = hasMore ? trimmed[trimmed.length - 1].id : null;
+  const nextCursor = hasMore ? String(trimmed[trimmed.length - 1]._id) : null;
 
-  return NextResponse.json({ items: trimmed, nextCursor });
+  // Resolve all slides + their output assets in two round-trips.
+  const carouselIds = trimmed.map((c) => String(c._id));
+  const slides = await ImageGeneration.find({ carouselId: { $in: carouselIds } })
+    .sort({ slotIndex: 1 })
+    .lean();
+  const outputIds = slides.map((s) => s.outputAssetId).filter((x): x is string => !!x);
+  const outputs = outputIds.length
+    ? await MediaAsset.find({ _id: { $in: outputIds } }).lean()
+    : [];
+  const outputMap = new Map(outputs.map((a) => [String(a._id), a]));
+
+  const slidesByCarousel = new Map<string, typeof slides>();
+  for (const s of slides) {
+    const cid = s.carouselId ?? "";
+    if (!cid) continue;
+    if (!slidesByCarousel.has(cid)) slidesByCarousel.set(cid, []);
+    slidesByCarousel.get(cid)!.push(s);
+  }
+
+  const enriched = trimmed.map((c) => ({
+    ...c,
+    slides: (slidesByCarousel.get(String(c._id)) ?? []).map((s) => ({
+      ...s,
+      outputAsset: s.outputAssetId ? (outputMap.get(s.outputAssetId) ?? null) : null,
+    })),
+  }));
+
+  return NextResponse.json({ items: toApi(enriched), nextCursor });
 }
 
 export async function POST(req: Request) {
+  await connectMongo();
   const env = getEnv();
 
   if (!isLlmConfigured()) {
@@ -64,15 +94,16 @@ export async function POST(req: Request) {
   const parsed = createCarouselSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json(
-      { error: parsed.error.issues[0]?.message ?? "Validation failed", issues: parsed.error.issues },
+      {
+        error: parsed.error.issues[0]?.message ?? "Validation failed",
+        issues: parsed.error.issues,
+      },
       { status: 400 },
     );
   }
   const input = parsed.data;
 
-  const subject = await prisma.mediaAsset.findUnique({
-    where: { id: input.subjectImageId },
-  });
+  const subject = await MediaAsset.findById(input.subjectImageId).lean();
   if (!subject || subject.ownerId !== env.DEFAULT_USER_ID || subject.kind !== "reference_image") {
     return NextResponse.json(
       { error: `subjectImage not found: ${input.subjectImageId}` },
@@ -86,10 +117,7 @@ export async function POST(req: Request) {
     height: subject.height ?? undefined,
   });
   if (!check.ok) {
-    return NextResponse.json(
-      { error: `${subject.filename}: ${check.reason}` },
-      { status: 400 },
-    );
+    return NextResponse.json({ error: `${subject.filename}: ${check.reason}` }, { status: 400 });
   }
 
   let plan;
@@ -119,84 +147,72 @@ export async function POST(req: Request) {
     input.endpoint,
   );
 
-  const carousel = await prisma.$transaction(async (tx) => {
-    const parent = await tx.imageCarousel.create({
-      data: {
-        ownerId: env.DEFAULT_USER_ID,
-        status: "queued",
-        n: input.n,
-        themePrompt: input.themePrompt ?? null,
-        vibeLabel: plan.vibeLabel,
-        subjectImageId: input.subjectImageId,
-        modelName: input.modelName,
-        endpoint: input.endpoint,
-        imageReference: input.imageReference ?? null,
-        aspectRatio: input.aspectRatio ?? null,
-        estimatedCostUsd: new Decimal(estimatedCost),
-      },
-    });
-
-    for (let i = 0; i < input.n; i++) {
-      const slide = plan.slides[i];
-      const externalTaskId = `kmc_carousel_${parent.id}_${i}_${randomUUID().slice(0, 8)}`;
-      // For image2image (default), one subject image is enough; the
-      // multi-image2image hack of duplicating into styleImageId is dropped.
-      // For multi-image2image, fall back to that hack so Kling's ≥2-refs
-      // requirement is satisfied without asking the user for two photos.
-      const isMulti = input.endpoint === "multi-image2image";
-      await tx.imageGeneration.create({
-        data: {
-          ownerId: env.DEFAULT_USER_ID,
-          status: "queued",
-          provider: "kling_official",
-          externalTaskId,
-          endpoint: input.endpoint,
-          subjectImageIds: [input.subjectImageId],
-          styleImageId: isMulti ? input.subjectImageId : null,
-          prompt: slide.prompt,
-          negativePrompt: slide.negativePrompt,
-          modelName: input.modelName,
-          imageReference: input.imageReference ?? null,
-          aspectRatio: input.aspectRatio ?? null,
-          n: 1,
-          // Per-slide caption pack is intentionally OFF; the carousel parent
-          // owns one unified caption set generated post-completion.
-          captionPackEnabled: false,
-          estimatedCostUsd: new Decimal(
-            estimateImageCostUsd(input.modelName as KlingImageModel, 1, input.endpoint),
-          ),
-          carouselId: parent.id,
-          slotIndex: i,
-          poseLabel: slide.poseLabel,
-        },
-      });
-    }
-
-    return tx.imageCarousel.findUniqueOrThrow({
-      where: { id: parent.id },
-      include: {
-        slides: { orderBy: { slotIndex: "asc" } },
-      },
-    });
+  const parent = await ImageCarousel.create({
+    ownerId: env.DEFAULT_USER_ID,
+    status: "queued",
+    n: input.n,
+    themePrompt: input.themePrompt ?? null,
+    vibeLabel: plan.vibeLabel,
+    subjectImageId: input.subjectImageId,
+    modelName: input.modelName,
+    endpoint: input.endpoint,
+    imageReference: input.imageReference ?? null,
+    aspectRatio: input.aspectRatio ?? null,
+    estimatedCostUsd: estimatedCost,
   });
 
-  // Enqueue jobs OUTSIDE the transaction so we don't hold a DB lock during
-  // Redis writes and so a Redis failure doesn't roll back the rows.
+  const isMulti = input.endpoint === "multi-image2image";
+  const slideDocs = await ImageGeneration.insertMany(
+    Array.from({ length: input.n }, (_, i) => {
+      const slide = plan.slides[i];
+      return {
+        ownerId: env.DEFAULT_USER_ID,
+        status: "queued",
+        provider: "kling_official",
+        externalTaskId: `kmc_carousel_${String(parent._id)}_${i}_${randomUUID().slice(0, 8)}`,
+        endpoint: input.endpoint,
+        subjectImageIds: [input.subjectImageId],
+        styleImageId: isMulti ? input.subjectImageId : null,
+        prompt: slide.prompt,
+        negativePrompt: slide.negativePrompt,
+        modelName: input.modelName,
+        imageReference: input.imageReference ?? null,
+        aspectRatio: input.aspectRatio ?? null,
+        n: 1,
+        captionPackEnabled: false,
+        estimatedCostUsd: estimateImageCostUsd(
+          input.modelName as KlingImageModel,
+          1,
+          input.endpoint,
+        ),
+        carouselId: String(parent._id),
+        slotIndex: i,
+        poseLabel: slide.poseLabel,
+      };
+    }),
+  );
+
+  // Enqueue jobs OUTSIDE any transaction so a Redis failure doesn't roll back rows.
   const queue = getImageGenerationQueue();
   await Promise.all(
-    carousel.slides.map((slide) =>
+    slideDocs.map((slide) =>
       queue.add(
         "image-to-image",
-        { imageGenerationId: slide.id },
-        { jobId: slide.id },
+        { imageGenerationId: String(slide._id) },
+        { jobId: String(slide._id) },
       ),
     ),
   );
 
   logger.info(
-    { carouselId: carousel.id, n: carousel.n, vibeLabel: carousel.vibeLabel },
+    { carouselId: String(parent._id), n: input.n, vibeLabel: parent.vibeLabel },
     "Carousel queued",
   );
 
-  return NextResponse.json({ carousel }, { status: 201 });
+  const carouselWithSlides = {
+    ...parent.toObject(),
+    slides: slideDocs.map((s) => s.toObject()),
+  };
+
+  return NextResponse.json({ carousel: toApi(carouselWithSlides) }, { status: 201 });
 }

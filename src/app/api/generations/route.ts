@@ -1,16 +1,18 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
+import { connectMongo } from "@/lib/mongo";
+import { Generation, MediaAsset } from "@/models";
 import { getEnv } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { getMotionControlQueue } from "@/lib/queue";
 import { estimateCostUsd } from "@/lib/kling/pricing";
 import { createGenerationSchema, validateImageFile, validateVideoFile } from "@/lib/validation";
-import { Decimal } from "@/generated/prisma/runtime/library";
+import { toApi } from "@/lib/serialize";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
+  await connectMongo();
   const env = getEnv();
   const url = new URL(req.url);
   const status = url.searchParams.get("status");
@@ -18,32 +20,50 @@ export async function GET(req: Request) {
   const limit = Math.min(parseInt(url.searchParams.get("limit") ?? "50", 10) || 50, 200);
   const cursor = url.searchParams.get("cursor") ?? undefined;
 
-  const where = {
-    ownerId: env.DEFAULT_USER_ID,
-    ...(status ? { status } : {}),
-    ...(favorite ? { isFavorite: true } : {}),
-  };
+  const filter: Record<string, unknown> = { ownerId: env.DEFAULT_USER_ID };
+  if (status) filter.status = status;
+  if (favorite) filter.isFavorite = true;
 
-  const items = await prisma.generation.findMany({
-    where,
-    orderBy: { createdAt: "desc" },
-    take: limit + 1,
-    ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
-    include: {
-      sourceVideo: true,
-      referenceImage: true,
-      outputAsset: true,
-    },
-  });
+  if (cursor) {
+    const cursorDoc = await Generation.findById(cursor).lean();
+    if (cursorDoc) {
+      filter.$or = [
+        { createdAt: { $lt: cursorDoc.createdAt } },
+        { createdAt: cursorDoc.createdAt, _id: { $lt: cursor } },
+      ];
+    }
+  }
+
+  const items = await Generation.find(filter)
+    .sort({ createdAt: -1, _id: -1 })
+    .limit(limit + 1)
+    .lean();
 
   const hasMore = items.length > limit;
   const trimmed = hasMore ? items.slice(0, limit) : items;
-  const nextCursor = hasMore ? trimmed[trimmed.length - 1].id : null;
+  const nextCursor = hasMore ? String(trimmed[trimmed.length - 1]._id) : null;
 
-  return NextResponse.json({ items: trimmed, nextCursor });
+  // Resolve referenced MediaAssets in one round-trip.
+  const assetIds = new Set<string>();
+  for (const g of trimmed) {
+    if (g.sourceVideoId) assetIds.add(g.sourceVideoId);
+    if (g.referenceImageId) assetIds.add(g.referenceImageId);
+    if (g.outputAssetId) assetIds.add(g.outputAssetId);
+  }
+  const assets = await MediaAsset.find({ _id: { $in: [...assetIds] } }).lean();
+  const assetMap = new Map(assets.map((a) => [String(a._id), a]));
+  const enriched = trimmed.map((g) => ({
+    ...g,
+    sourceVideo: assetMap.get(g.sourceVideoId) ?? null,
+    referenceImage: assetMap.get(g.referenceImageId) ?? null,
+    outputAsset: g.outputAssetId ? (assetMap.get(g.outputAssetId) ?? null) : null,
+  }));
+
+  return NextResponse.json({ items: toApi(enriched), nextCursor });
 }
 
 export async function POST(req: Request) {
+  await connectMongo();
   const env = getEnv();
   let body: unknown;
   try {
@@ -62,8 +82,8 @@ export async function POST(req: Request) {
   const input = parsed.data;
 
   const [sourceVideo, referenceImage] = await Promise.all([
-    prisma.mediaAsset.findUnique({ where: { id: input.sourceVideoId } }),
-    prisma.mediaAsset.findUnique({ where: { id: input.referenceImageId } }),
+    MediaAsset.findById(input.sourceVideoId).lean(),
+    MediaAsset.findById(input.referenceImageId).lean(),
   ]);
   if (!sourceVideo || sourceVideo.ownerId !== env.DEFAULT_USER_ID || sourceVideo.kind !== "source_video") {
     return NextResponse.json({ error: "sourceVideoId not found" }, { status: 400 });
@@ -102,28 +122,33 @@ export async function POST(req: Request) {
   const { randomUUID } = await import("node:crypto");
   const externalTaskId = `kmc_${randomUUID().replace(/-/g, "")}`;
 
-  const generation = await prisma.generation.create({
-    data: {
-      ownerId: env.DEFAULT_USER_ID,
-      status: "queued",
-      provider: "kling_official",
-      externalTaskId,
-      sourceVideoId: sourceVideo.id,
-      referenceImageId: referenceImage.id,
-      prompt: input.prompt,
-      modelName: input.modelName,
-      mode: input.mode,
-      characterOrientation: input.characterOrientation,
-      keepOriginalSound: input.keepOriginalSound,
-      watermarkEnabled: input.watermarkEnabled,
-      captionPackEnabled: input.captionPackEnabled,
-      estimatedCostUsd: new Decimal(estimatedCost),
-    },
+  const generation = await Generation.create({
+    ownerId: env.DEFAULT_USER_ID,
+    status: "queued",
+    provider: "kling_official",
+    externalTaskId,
+    sourceVideoId: String(sourceVideo._id),
+    referenceImageId: String(referenceImage._id),
+    prompt: input.prompt ?? null,
+    modelName: input.modelName,
+    mode: input.mode,
+    characterOrientation: input.characterOrientation,
+    keepOriginalSound: input.keepOriginalSound,
+    watermarkEnabled: input.watermarkEnabled,
+    captionPackEnabled: input.captionPackEnabled,
+    estimatedCostUsd: estimatedCost,
   });
 
   const queue = getMotionControlQueue();
-  await queue.add("motion-control", { generationId: generation.id }, { jobId: generation.id });
-  logger.info({ generationId: generation.id, externalTaskId }, "Generation enqueued");
+  await queue.add(
+    "motion-control",
+    { generationId: String(generation._id) },
+    { jobId: String(generation._id) },
+  );
+  logger.info(
+    { generationId: String(generation._id), externalTaskId },
+    "Generation enqueued",
+  );
 
-  return NextResponse.json({ generation }, { status: 201 });
+  return NextResponse.json({ generation: toApi(generation.toObject()) }, { status: 201 });
 }

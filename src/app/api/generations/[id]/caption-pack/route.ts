@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
+import { connectMongo } from "@/lib/mongo";
+import { Generation, MediaAsset } from "@/models";
 import { getEnv } from "@/lib/env";
 import { generateCaptionPack, isLlmConfigured } from "@/lib/gemini";
 import { logger } from "@/lib/logger";
+import { toApi } from "@/lib/serialize";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,12 +19,10 @@ export async function POST(_req: Request, ctx: Ctx) {
     );
   }
 
+  await connectMongo();
   const env = getEnv();
   const { id } = await ctx.params;
-  const generation = await prisma.generation.findUnique({
-    where: { id },
-    include: { outputAsset: true },
-  });
+  const generation = await Generation.findById(id).lean();
   if (!generation || generation.ownerId !== env.DEFAULT_USER_ID) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
@@ -33,24 +33,31 @@ export async function POST(_req: Request, ctx: Ctx) {
     );
   }
 
+  const outputAsset = generation.outputAssetId
+    ? await MediaAsset.findById(generation.outputAssetId).lean()
+    : null;
+
   try {
     const pack = await generateCaptionPack({
       mediaKind: "video",
       prompt: generation.prompt,
-      facts: { durationSec: generation.outputAsset?.durationSec ?? null },
+      facts: { durationSec: outputAsset?.durationSec ?? null },
     });
-    const updated = await prisma.generation.update({
-      where: { id },
-      data: {
-        captionPackEnabled: true,
-        caption: pack.caption,
-        captionTags: pack.tags,
-        captionLocation: pack.location,
-        captionAccessibility: pack.accessibilityText,
-        captionPackGeneratedAt: new Date(),
+    const updated = await Generation.findByIdAndUpdate(
+      id,
+      {
+        $set: {
+          captionPackEnabled: true,
+          caption: pack.caption,
+          captionTags: pack.tags,
+          captionLocation: pack.location,
+          captionAccessibility: pack.accessibilityText,
+          captionPackGeneratedAt: new Date(),
+        },
       },
-    });
-    return NextResponse.json({ generation: updated });
+      { new: true, lean: true },
+    );
+    return NextResponse.json({ generation: toApi(updated!) });
   } catch (err) {
     logger.error(
       { err: err instanceof Error ? err.message : String(err) },

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
+import { connectMongo } from "@/lib/mongo";
+import { Generation } from "@/models";
 import { getEnv } from "@/lib/env";
 import { pricingTable } from "@/lib/kling/pricing";
 
@@ -7,6 +8,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
+  await connectMongo();
   const env = getEnv();
   const ownerId = env.DEFAULT_USER_ID;
   const now = new Date();
@@ -21,11 +23,10 @@ export async function GET() {
     sumCost(ownerId, startOfWeek),
     sumCost(ownerId, startOfMonth),
     sumCost(ownerId, null),
-    prisma.generation.groupBy({
-      by: ["status"],
-      where: { ownerId },
-      _count: { _all: true },
-    }),
+    Generation.aggregate([
+      { $match: { ownerId } },
+      { $group: { _id: "$status", count: { $sum: 1 } } },
+    ]),
   ]);
 
   return NextResponse.json({
@@ -37,35 +38,44 @@ export async function GET() {
       pending: all.estimatedPending,
     },
     counts: Object.fromEntries(
-      statusBreakdown.map((b: { status: string; _count: { _all: number } }) => [
-        b.status,
-        b._count._all,
-      ]),
+      (statusBreakdown as Array<{ _id: string; count: number }>).map((b) => [b._id, b.count]),
     ) as Record<string, number>,
     pricingTable: pricingTable(),
   });
 }
 
 async function sumCost(ownerId: string, sinceDate: Date | null) {
-  const completed = await prisma.generation.aggregate({
-    where: {
-      ownerId,
-      status: "completed",
-      ...(sinceDate ? { completedAt: { gte: sinceDate } } : {}),
-    },
-    _sum: { actualCostUsd: true, estimatedCostUsd: true },
-  });
-  const pending = await prisma.generation.aggregate({
-    where: {
-      ownerId,
-      status: { in: ["queued", "processing"] },
-      ...(sinceDate ? { createdAt: { gte: sinceDate } } : {}),
-    },
-    _sum: { estimatedCostUsd: true },
-  });
+  const completedMatch: Record<string, unknown> = { ownerId, status: "completed" };
+  if (sinceDate) completedMatch.completedAt = { $gte: sinceDate };
+
+  const pendingMatch: Record<string, unknown> = {
+    ownerId,
+    status: { $in: ["queued", "processing"] },
+  };
+  if (sinceDate) pendingMatch.createdAt = { $gte: sinceDate };
+
+  const [completedAgg, pendingAgg] = await Promise.all([
+    Generation.aggregate([
+      { $match: completedMatch },
+      {
+        $group: {
+          _id: null,
+          actualSum: { $sum: { $ifNull: ["$actualCostUsd", 0] } },
+          estimatedSum: { $sum: { $ifNull: ["$estimatedCostUsd", 0] } },
+        },
+      },
+    ]),
+    Generation.aggregate([
+      { $match: pendingMatch },
+      { $group: { _id: null, estimatedSum: { $sum: { $ifNull: ["$estimatedCostUsd", 0] } } } },
+    ]),
+  ]);
+
+  const completed = completedAgg[0] as { actualSum?: number; estimatedSum?: number } | undefined;
+  const pending = pendingAgg[0] as { estimatedSum?: number } | undefined;
 
   return {
-    actual: Number(completed._sum.actualCostUsd ?? completed._sum.estimatedCostUsd ?? 0),
-    estimatedPending: Number(pending._sum.estimatedCostUsd ?? 0),
+    actual: Number(completed?.actualSum ?? completed?.estimatedSum ?? 0),
+    estimatedPending: Number(pending?.estimatedSum ?? 0),
   };
 }

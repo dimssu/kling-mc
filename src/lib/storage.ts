@@ -8,6 +8,7 @@ import {
 import { Upload } from "@aws-sdk/lib-storage";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { Readable } from "node:stream";
+import { randomUUID } from "node:crypto";
 import { getEnv } from "./env";
 
 let _client: S3Client | null = null;
@@ -15,15 +16,26 @@ function client() {
   if (_client) return _client;
   const env = getEnv();
   _client = new S3Client({
-    endpoint: env.S3_ENDPOINT,
     region: env.S3_REGION,
     credentials: {
-      accessKeyId: env.S3_ACCESS_KEY,
-      secretAccessKey: env.S3_SECRET_KEY,
+      accessKeyId: env.S3_ACCESS_KEY_ID,
+      secretAccessKey: env.S3_SECRET_ACCESS_KEY,
     },
-    forcePathStyle: env.S3_FORCE_PATH_STYLE,
   });
   return _client;
+}
+
+// Key-prefix convention. Both projects share one bucket; kling-mc writes
+// under `mc/`, kling-gallery writes under `gallery/`.
+export const MC_PREFIX = "mc";
+
+export function makeUploadKey(userId: string, kind: string, ext: string): string {
+  const id = randomUUID().replace(/-/g, "");
+  return `${MC_PREFIX}/uploads/${userId}/${kind}/${id}.${ext.replace(/^\./, "")}`;
+}
+
+export function makeOutputKey(userId: string, generationId: string, ext: string): string {
+  return `${MC_PREFIX}/outputs/${userId}/${generationId}.${ext.replace(/^\./, "")}`;
 }
 
 export type UploadInput = {
@@ -95,25 +107,11 @@ export async function getPresignedDownloadUrl(
   expiresInSec = 3600,
 ): Promise<string> {
   const env = getEnv();
-  const url = await getSignedUrl(
+  return getSignedUrl(
     client(),
     new GetObjectCommand({ Bucket: env.S3_BUCKET, Key: key }),
     { expiresIn: expiresInSec },
   );
-  // If a public endpoint is configured (e.g. a cloudflared tunnel for local
-  // dev), rewrite the URL's origin so external services can fetch it. The
-  // signed query string remains valid because S3 SigV4 signs the path + query,
-  // not the host.
-  if (!env.S3_PUBLIC_ENDPOINT) return url;
-  try {
-    const parsed = new URL(url);
-    const publicBase = new URL(env.S3_PUBLIC_ENDPOINT);
-    parsed.protocol = publicBase.protocol;
-    parsed.host = publicBase.host;
-    return parsed.toString();
-  } catch {
-    return url;
-  }
 }
 
 export function getPublicUrl(key: string): string {
@@ -122,22 +120,12 @@ export function getPublicUrl(key: string): string {
 }
 
 /**
- * URL we hand to external services (like Kling) so they can fetch our
- * uploads. Prefers the publicly-tunneled hostname (S3_PUBLIC_ENDPOINT) when
- * set; otherwise falls back to the regular public path (works in prod where
- * the bucket itself is on a public domain).
- *
- * The bucket is configured for anonymous read (see docker-compose.dev.yml's
- * minio-bucket-init step). We deliberately don't presign here because cloudflared
- * rewrites the Host header before forwarding to MinIO, which invalidates SigV4
- * signatures. Keys include random UUIDs so guessing is impractical.
+ * URL we hand to Kling so it can fetch our uploads. With real AWS S3 (not
+ * MinIO), the public URL is directly fetchable — no tunnel rewrite needed.
+ * Kept as a separate helper so call sites that semantically mean "give Kling
+ * a URL to fetch" stay self-documenting.
  */
 export function getKlingFetchUrl(key: string): string {
-  const env = getEnv();
-  if (env.S3_PUBLIC_ENDPOINT) {
-    const base = env.S3_PUBLIC_ENDPOINT.replace(/\/+$/, "");
-    return `${base}/${env.S3_BUCKET}/${key}`;
-  }
   return getPublicUrl(key);
 }
 

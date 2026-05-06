@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
+import { connectMongo } from "@/lib/mongo";
+import { ImageGeneration } from "@/models";
 import { getEnv } from "@/lib/env";
 import { generateCaptionPack, isLlmConfigured } from "@/lib/gemini";
 import { logger } from "@/lib/logger";
+import { toApi } from "@/lib/serialize";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -17,9 +19,10 @@ export async function POST(_req: Request, ctx: Ctx) {
     );
   }
 
+  await connectMongo();
   const env = getEnv();
   const { id } = await ctx.params;
-  const imageGen = await prisma.imageGeneration.findUnique({ where: { id } });
+  const imageGen = await ImageGeneration.findById(id).lean();
   if (!imageGen || imageGen.ownerId !== env.DEFAULT_USER_ID) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
@@ -36,18 +39,21 @@ export async function POST(_req: Request, ctx: Ctx) {
       prompt: imageGen.prompt,
       facts: { aspectRatio: imageGen.aspectRatio },
     });
-    const updated = await prisma.imageGeneration.update({
-      where: { id },
-      data: {
-        captionPackEnabled: true,
-        caption: pack.caption,
-        captionTags: pack.tags,
-        captionLocation: pack.location,
-        captionAccessibility: pack.accessibilityText,
-        captionPackGeneratedAt: new Date(),
+    const updated = await ImageGeneration.findByIdAndUpdate(
+      id,
+      {
+        $set: {
+          captionPackEnabled: true,
+          caption: pack.caption,
+          captionTags: pack.tags,
+          captionLocation: pack.location,
+          captionAccessibility: pack.accessibilityText,
+          captionPackGeneratedAt: new Date(),
+        },
       },
-    });
-    return NextResponse.json({ imageGeneration: updated });
+      { new: true, lean: true },
+    );
+    return NextResponse.json({ imageGeneration: toApi(updated!) });
   } catch (err) {
     logger.error(
       { err: err instanceof Error ? err.message : String(err) },

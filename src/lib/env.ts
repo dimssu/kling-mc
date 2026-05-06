@@ -8,24 +8,19 @@ const schema = z.object({
   KLING_DEFAULT_MODEL: z.enum(["kling-v2-6", "kling-v3"]).default("kling-v2-6"),
   KLING_DEFAULT_MODE: z.enum(["std", "pro"]).default("std"),
 
-  DATABASE_URL: z.string().url(),
+  // MongoDB (Atlas or self-hosted). Same cluster as kling-gallery, different DB.
+  MONGODB_URI: z.string().min(1),
+  MONGODB_DB: z.string().default("kling_mc"),
+
   REDIS_URL: z.string().url().default("redis://localhost:6379"),
 
-  S3_ENDPOINT: z.string().url(),
-  S3_REGION: z.string().default("us-east-1"),
+  // AWS S3 (shared bucket with kling-gallery; key prefix `mc/` for this app).
+  S3_REGION: z.string().min(1),
   S3_BUCKET: z.string().min(1),
-  S3_ACCESS_KEY: z.string().min(1),
-  S3_SECRET_KEY: z.string().min(1),
+  S3_ACCESS_KEY_ID: z.string().min(1),
+  S3_SECRET_ACCESS_KEY: z.string().min(1),
+  // Public URL base (S3 virtual-hosted style or CloudFront), no trailing slash.
   S3_PUBLIC_URL_BASE: z.string().url(),
-  // Optional: public-internet hostname for the same MinIO/S3 — used only when
-  // generating presigned URLs we hand to external services like Kling.
-  // For local dev set this to the URL of your tunnel (cloudflared / ssh -R)
-  // pointing at localhost:9000. Leave blank to use S3_ENDPOINT directly.
-  S3_PUBLIC_ENDPOINT: z.string().url().optional().or(z.literal("")).default(""),
-  S3_FORCE_PATH_STYLE: z
-    .string()
-    .default("true")
-    .transform((v) => v === "true"),
 
   APP_BASE_URL: z.string().url().default("http://localhost:3000"),
   DEFAULT_USER_ID: z.string().default("local"),
@@ -44,6 +39,10 @@ const schema = z.object({
   // the LLM features no-op gracefully if unset.
   GEMINI_API_KEY: z.string().optional().default(""),
   GEMINI_MODEL: z.string().default("gemini-2.5-flash"),
+
+  // Optional: kling-gallery sync. Used by scripts/sync-to-gallery.ts.
+  GALLERY_INGEST_URL: z.string().url().optional().or(z.literal("")).default(""),
+  GALLERY_INGEST_TOKEN: z.string().optional().default(""),
 });
 
 let cached: z.infer<typeof schema> | null = null;

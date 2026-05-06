@@ -1,15 +1,19 @@
 import type { Logger } from "pino";
-import { Decimal, type InputJsonValue } from "@/generated/prisma/runtime/library";
-import { prisma } from "@/lib/db";
+import { connectMongo } from "@/lib/mongo";
+import { ImageGeneration, MediaAsset } from "@/models";
 import { logger } from "@/lib/logger";
 import { getKlingProvider } from "@/lib/kling";
 import { KlingApiError } from "@/lib/kling/errors";
 import { imageDeductionToUsd, type KlingImageModel } from "@/lib/kling/pricing";
-import type {
-  KlingImageEndpoint,
-} from "@/lib/kling/models";
+import type { KlingImageEndpoint } from "@/lib/kling/models";
 import type { KlingImageAspectRatio } from "@/lib/kling/types";
-import { downloadToBuffer, getKlingFetchUrl, getPublicUrl, uploadObject } from "@/lib/storage";
+import {
+  downloadToBuffer,
+  getKlingFetchUrl,
+  getPublicUrl,
+  makeOutputKey,
+  uploadObject,
+} from "@/lib/storage";
 import { sniffMime, extForMime } from "@/lib/mime-sniff";
 import { getEnv } from "@/lib/env";
 import { signGid } from "@/lib/webhook-auth";
@@ -23,11 +27,10 @@ const POLL_PHASES: Array<{ untilSec: number; intervalMs: number }> = [
 const HARD_TIMEOUT_MS = 20 * 60 * 1000;
 
 export async function handleImageGenerationJob(imageGenerationId: string): Promise<void> {
+  await connectMongo();
   const log = logger.child({ imageGenerationId });
-  const imageGen = await prisma.imageGeneration.findUniqueOrThrow({
-    where: { id: imageGenerationId },
-    include: { sceneImage: true, styleImage: true },
-  });
+  const imageGen = await ImageGeneration.findById(imageGenerationId).lean();
+  if (!imageGen) throw new Error(`ImageGeneration ${imageGenerationId} not found`);
 
   if (imageGen.status === "completed" || imageGen.status === "failed") {
     log.info({ status: imageGen.status }, "Skipping job — already terminal");
@@ -41,26 +44,28 @@ export async function handleImageGenerationJob(imageGenerationId: string): Promi
   const endpoint = (imageGen.endpoint as KlingImageEndpoint) || "multi-image2image";
 
   if (!providerTaskId) {
-    // Resolve subject MediaAssets in the order the user picked them.
-    const subjects = await prisma.mediaAsset.findMany({
-      where: { id: { in: imageGen.subjectImageIds } },
-    });
-    const byId = new Map(subjects.map((a) => [a.id, a]));
+    // Resolve all referenced MediaAssets in one round-trip.
+    const refIds = [
+      ...imageGen.subjectImageIds,
+      imageGen.sceneImageId,
+      imageGen.styleImageId,
+    ].filter((x): x is string => !!x);
+    const assets = await MediaAsset.find({ _id: { $in: refIds } }).lean();
+    const byId = new Map(assets.map((a) => [String(a._id), a]));
+
     const subjectImageUrls: string[] = [];
     for (const sid of imageGen.subjectImageIds) {
       const a = byId.get(sid);
       if (!a) {
-        await markFailed(imageGen.id, new Error(`Subject image ${sid} not found`));
+        await markFailed(imageGen._id, new Error(`Subject image ${sid} not found`));
         return;
       }
       subjectImageUrls.push(getKlingFetchUrl(a.storageKey));
     }
-    const sceneImageUrl = imageGen.sceneImage
-      ? getKlingFetchUrl(imageGen.sceneImage.storageKey)
-      : undefined;
-    const styleImageUrl = imageGen.styleImage
-      ? getKlingFetchUrl(imageGen.styleImage.storageKey)
-      : undefined;
+    const sceneImage = imageGen.sceneImageId ? byId.get(imageGen.sceneImageId) : null;
+    const styleImage = imageGen.styleImageId ? byId.get(imageGen.styleImageId) : null;
+    const sceneImageUrl = sceneImage ? getKlingFetchUrl(sceneImage.storageKey) : undefined;
+    const styleImageUrl = styleImage ? getKlingFetchUrl(styleImage.storageKey) : undefined;
 
     log.info(
       {
@@ -74,18 +79,18 @@ export async function handleImageGenerationJob(imageGenerationId: string): Promi
 
     const callbackUrl =
       env.ENABLE_KLING_WEBHOOKS && env.WEBHOOK_SECRET
-        ? `${env.APP_BASE_URL.replace(/\/+$/, "")}/api/webhooks/kling?gid=${encodeURIComponent(imageGen.id)}&sig=${signGid(imageGen.id)}`
+        ? `${env.APP_BASE_URL.replace(/\/+$/, "")}/api/webhooks/kling?gid=${encodeURIComponent(imageGen._id)}&sig=${signGid(imageGen._id)}`
         : undefined;
 
     try {
       let result;
       if (endpoint === "image2image") {
         if (!subjectImageUrls[0]) {
-          await markFailed(imageGen.id, new Error("image2image requires a subject image"));
+          await markFailed(imageGen._id, new Error("image2image requires a subject image"));
           return;
         }
         if (!imageGen.prompt) {
-          await markFailed(imageGen.id, new Error("image2image requires a prompt"));
+          await markFailed(imageGen._id, new Error("image2image requires a prompt"));
           return;
         }
         log.info("Creating Kling single-image2image task");
@@ -121,22 +126,22 @@ export async function handleImageGenerationJob(imageGenerationId: string): Promi
         });
       }
       providerTaskId = result.providerTaskId;
-      await prisma.imageGeneration.update({
-        where: { id: imageGen.id },
-        data: { providerTaskId, status: "processing", submittedAt: new Date() },
-      });
+      await ImageGeneration.updateOne(
+        { _id: imageGen._id },
+        { $set: { providerTaskId, status: "processing", submittedAt: new Date() } },
+      );
       log.info({ providerTaskId }, "Kling image task created");
     } catch (err) {
       const retryable = err instanceof KlingApiError && err.retryable;
       if (!retryable) {
-        await markFailed(imageGen.id, err);
+        await markFailed(imageGen._id, err);
         return;
       }
       throw err;
     }
   }
 
-  await pollUntilTerminal(imageGen.id, providerTaskId, endpoint, log);
+  await pollUntilTerminal(imageGen._id, providerTaskId, endpoint, log);
 }
 
 async function pollUntilTerminal(
@@ -175,29 +180,33 @@ async function pollUntilTerminal(
       return;
     }
     if (result.status === "failed") {
-      await prisma.imageGeneration.update({
-        where: { id: imageGenerationId },
-        data: {
-          status: "failed",
-          errorMessage: result.statusMessage ?? "Generation failed",
-          completedAt: new Date(),
-          rawProviderPayload: toJsonValue(result.rawPayload),
+      await ImageGeneration.updateOne(
+        { _id: imageGenerationId },
+        {
+          $set: {
+            status: "failed",
+            errorMessage: result.statusMessage ?? "Generation failed",
+            completedAt: new Date(),
+            rawProviderPayload: result.rawPayload ?? null,
+          },
         },
-      });
+      );
       log.warn({ statusMessage: result.statusMessage }, "Kling reported failure");
       return;
     }
     await sleep(phase.intervalMs);
   }
 
-  await prisma.imageGeneration.update({
-    where: { id: imageGenerationId },
-    data: {
-      status: "failed",
-      errorMessage: "Polling timeout exceeded (20 minutes)",
-      completedAt: new Date(),
+  await ImageGeneration.updateOne(
+    { _id: imageGenerationId },
+    {
+      $set: {
+        status: "failed",
+        errorMessage: "Polling timeout exceeded (20 minutes)",
+        completedAt: new Date(),
+      },
     },
-  });
+  );
   log.error("Polling timed out");
 }
 
@@ -207,19 +216,22 @@ async function finalizeSuccess(
   log: Logger,
 ): Promise<void> {
   if (!result.imageUrl) {
-    await prisma.imageGeneration.update({
-      where: { id: imageGenerationId },
-      data: {
-        status: "failed",
-        errorMessage: "Provider returned succeed without an image URL",
-        completedAt: new Date(),
-        rawProviderPayload: toJsonValue(result.rawPayload),
+    await ImageGeneration.updateOne(
+      { _id: imageGenerationId },
+      {
+        $set: {
+          status: "failed",
+          errorMessage: "Provider returned succeed without an image URL",
+          completedAt: new Date(),
+          rawProviderPayload: result.rawPayload ?? null,
+        },
       },
-    });
+    );
     return;
   }
 
-  const imageGen = await prisma.imageGeneration.findUniqueOrThrow({ where: { id: imageGenerationId } });
+  const imageGen = await ImageGeneration.findById(imageGenerationId).lean();
+  if (!imageGen) return;
   if (imageGen.status === "completed") {
     log.info("Already completed by another worker — skipping finalize");
     return;
@@ -228,14 +240,19 @@ async function finalizeSuccess(
   log.info({ imageUrl: result.imageUrl }, "Downloading generated image");
   const { buffer, contentType } = await downloadToBuffer(result.imageUrl);
 
-  // Prefer the magic-byte-sniffed type over what Kling claims, in case the
-  // server set a generic content-type.
+  // Prefer the magic-byte-sniffed type over what Kling claims.
   const sniffed = sniffMime(buffer.subarray(0, 12));
   const finalContentType = sniffed ?? contentType;
-  const ext = extForMime(sniffed) === "bin" ? guessImageExt(contentType) : extForMime(sniffed);
+  const ext =
+    extForMime(sniffed) === "bin" ? guessImageExt(contentType) : extForMime(sniffed);
 
-  const storageKey = `image-generations/${imageGen.ownerId}/${imageGen.id}.${ext}`;
-  await uploadObject({ key: storageKey, body: buffer, contentType: finalContentType, contentLength: buffer.length });
+  const storageKey = makeOutputKey(imageGen.ownerId, imageGen._id, ext);
+  await uploadObject({
+    key: storageKey,
+    body: buffer,
+    contentType: finalContentType,
+    contentLength: buffer.length,
+  });
 
   const actualCostUsd = imageDeductionToUsd(
     imageGen.modelName as KlingImageModel,
@@ -244,40 +261,37 @@ async function finalizeSuccess(
     (imageGen.endpoint as KlingImageEndpoint) || "multi-image2image",
   );
 
-  await prisma.$transaction(async (tx) => {
-    const outputAsset = await tx.mediaAsset.create({
-      data: {
-        ownerId: imageGen.ownerId,
-        kind: "generated_image",
-        filename: `${imageGen.id}.${ext}`,
-        mimeType: finalContentType,
-        sizeBytes: buffer.length,
-        storageKey,
-      },
-    });
-    const updated = await tx.imageGeneration.updateMany({
-      where: { id: imageGenerationId, status: { not: "completed" } },
-      data: {
+  const outputAsset = await MediaAsset.create({
+    ownerId: imageGen.ownerId,
+    kind: "generated_image",
+    filename: `${imageGen._id}.${ext}`,
+    mimeType: finalContentType,
+    sizeBytes: buffer.length,
+    storageKey,
+  });
+
+  const won = await ImageGeneration.updateOne(
+    { _id: imageGenerationId, status: { $ne: "completed" } },
+    {
+      $set: {
         status: "completed",
-        outputAssetId: outputAsset.id,
+        outputAssetId: String(outputAsset._id),
         completedAt: new Date(),
         finalUnitDeduction: result.finalUnitDeduction,
-        actualCostUsd: actualCostUsd != null ? new Decimal(actualCostUsd) : null,
-        rawProviderPayload: toJsonValue(result.rawPayload),
+        actualCostUsd: actualCostUsd ?? null,
+        rawProviderPayload: result.rawPayload ?? null,
       },
-    });
-    if (updated.count === 0) throw new RaceLostError();
-  }).catch((err) => {
-    if (err instanceof RaceLostError) {
-      log.info("Lost finalize race; rolled back");
-      return;
-    }
-    throw err;
-  });
+    },
+  );
+
+  if (won.matchedCount === 0) {
+    log.info("Lost finalize race; rolling back orphan asset");
+    await MediaAsset.deleteOne({ _id: outputAsset._id });
+    return;
+  }
 
   log.info({ publicUrl: getPublicUrl(storageKey) }, "Image generation completed");
 
-  // Caption pack: post-finalize, never fatal.
   if (imageGen.captionPackEnabled && isLlmConfigured()) {
     try {
       log.info("Generating caption pack");
@@ -286,16 +300,18 @@ async function finalizeSuccess(
         prompt: imageGen.prompt,
         facts: { aspectRatio: imageGen.aspectRatio },
       });
-      await prisma.imageGeneration.update({
-        where: { id: imageGenerationId },
-        data: {
-          caption: pack.caption,
-          captionTags: pack.tags,
-          captionLocation: pack.location,
-          captionAccessibility: pack.accessibilityText,
-          captionPackGeneratedAt: new Date(),
+      await ImageGeneration.updateOne(
+        { _id: imageGenerationId },
+        {
+          $set: {
+            caption: pack.caption,
+            captionTags: pack.tags,
+            captionLocation: pack.location,
+            captionAccessibility: pack.accessibilityText,
+            captionPackGeneratedAt: new Date(),
+          },
         },
-      });
+      );
       log.info("Caption pack saved");
     } catch (err) {
       log.warn(
@@ -306,17 +322,20 @@ async function finalizeSuccess(
   }
 }
 
-class RaceLostError extends Error {
-  constructor() { super("race-lost"); }
-}
-
 async function markFailed(imageGenerationId: string, err: unknown): Promise<void> {
   const message = err instanceof Error ? err.message : String(err);
   const code = err instanceof KlingApiError ? err.code : null;
-  await prisma.imageGeneration.update({
-    where: { id: imageGenerationId },
-    data: { status: "failed", errorMessage: message, errorCode: code, completedAt: new Date() },
-  });
+  await ImageGeneration.updateOne(
+    { _id: imageGenerationId },
+    {
+      $set: {
+        status: "failed",
+        errorMessage: message,
+        errorCode: code,
+        completedAt: new Date(),
+      },
+    },
+  );
 }
 
 function guessImageExt(contentType: string): string {
@@ -324,10 +343,6 @@ function guessImageExt(contentType: string): string {
   if (contentType.includes("jpeg") || contentType.includes("jpg")) return "jpg";
   if (contentType.includes("webp")) return "webp";
   return "png";
-}
-
-function toJsonValue(v: unknown): InputJsonValue {
-  return JSON.parse(JSON.stringify(v ?? null)) as InputJsonValue;
 }
 
 function sleep(ms: number): Promise<void> {

@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
+import { connectMongo } from "@/lib/mongo";
+import { ImageGeneration, MediaAsset } from "@/models";
 import { getEnv } from "@/lib/env";
 import { deleteObject } from "@/lib/storage";
 import { logger } from "@/lib/logger";
+import { toApi } from "@/lib/serialize";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -10,48 +12,62 @@ export const dynamic = "force-dynamic";
 type Ctx = { params: Promise<{ id: string }> };
 
 export async function GET(_req: Request, ctx: Ctx) {
+  await connectMongo();
   const env = getEnv();
   const { id } = await ctx.params;
-  const imageGeneration = await prisma.imageGeneration.findUnique({
-    where: { id },
-    include: { sceneImage: true, styleImage: true, outputAsset: true },
-  });
+  const imageGeneration = await ImageGeneration.findById(id).lean();
   if (!imageGeneration || imageGeneration.ownerId !== env.DEFAULT_USER_ID) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
-  // subjectImageIds is a Postgres String[] with no FK, so resolve to assets
-  // here. Preserves the order the user picked.
-  const subjects = await prisma.mediaAsset.findMany({
-    where: { id: { in: imageGeneration.subjectImageIds } },
-  });
-  const byId = new Map(subjects.map((a) => [a.id, a]));
+
+  const refIds = [
+    ...imageGeneration.subjectImageIds,
+    imageGeneration.sceneImageId,
+    imageGeneration.styleImageId,
+    imageGeneration.outputAssetId,
+  ].filter((x): x is string => !!x);
+  const assets = await MediaAsset.find({ _id: { $in: refIds } }).lean();
+  const m = new Map(assets.map((a) => [String(a._id), a]));
+
   const subjectImages = imageGeneration.subjectImageIds
-    .map((sid) => byId.get(sid))
+    .map((sid) => m.get(sid))
     .filter((a): a is NonNullable<typeof a> => !!a);
 
-  return NextResponse.json({ imageGeneration: { ...imageGeneration, subjectImages } });
+  return NextResponse.json({
+    imageGeneration: toApi({
+      ...imageGeneration,
+      subjectImages,
+      sceneImage: imageGeneration.sceneImageId
+        ? (m.get(imageGeneration.sceneImageId) ?? null)
+        : null,
+      styleImage: imageGeneration.styleImageId
+        ? (m.get(imageGeneration.styleImageId) ?? null)
+        : null,
+      outputAsset: imageGeneration.outputAssetId
+        ? (m.get(imageGeneration.outputAssetId) ?? null)
+        : null,
+    }),
+  });
 }
 
 export async function DELETE(_req: Request, ctx: Ctx) {
+  await connectMongo();
   const env = getEnv();
   const { id } = await ctx.params;
-  const imageGeneration = await prisma.imageGeneration.findUnique({
-    where: { id },
-    include: { outputAsset: true },
-  });
+  const imageGeneration = await ImageGeneration.findById(id).lean();
   if (!imageGeneration || imageGeneration.ownerId !== env.DEFAULT_USER_ID) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  const outputAssetId = imageGeneration.outputAsset?.id;
-  const outputStorageKey = imageGeneration.outputAsset?.storageKey;
+  const outputAsset = imageGeneration.outputAssetId
+    ? await MediaAsset.findById(imageGeneration.outputAssetId).lean()
+    : null;
+  const outputStorageKey = outputAsset?.storageKey;
 
-  await prisma.$transaction(async (tx) => {
-    await tx.imageGeneration.delete({ where: { id } });
-    if (outputAssetId) {
-      await tx.mediaAsset.delete({ where: { id: outputAssetId } });
-    }
-  });
+  await ImageGeneration.deleteOne({ _id: id });
+  if (outputAsset) {
+    await MediaAsset.deleteOne({ _id: outputAsset._id });
+  }
 
   if (outputStorageKey) {
     try {

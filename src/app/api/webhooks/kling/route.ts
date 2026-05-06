@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
+import { connectMongo } from "@/lib/mongo";
+import { Generation } from "@/models";
 import { getEnv } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { getMotionControlQueue } from "@/lib/queue";
@@ -44,14 +45,18 @@ export async function POST(req: Request) {
   }
 
   logger.info(
-    { generationId, payloadShape: payload && typeof payload === "object" ? Object.keys(payload) : null },
+    {
+      generationId,
+      payloadShape:
+        payload && typeof payload === "object" ? Object.keys(payload) : null,
+    },
     "Received Kling callback",
   );
 
-  const generation = await prisma.generation.findUnique({
-    where: { id: generationId },
-    select: { id: true, status: true, ownerId: true },
-  });
+  await connectMongo();
+  const generation = await Generation.findById(generationId)
+    .select({ _id: 1, status: 1, ownerId: 1 })
+    .lean();
   if (!generation || generation.ownerId !== env.DEFAULT_USER_ID) {
     return NextResponse.json({ ok: true, note: "unknown generation" });
   }
@@ -63,8 +68,8 @@ export async function POST(req: Request) {
   const queue = getMotionControlQueue();
   await queue.add(
     "motion-control",
-    { generationId: generation.id },
-    { jobId: `webhook-poke-${generation.id}-${Date.now()}` },
+    { generationId: String(generation._id) },
+    { jobId: `webhook-poke-${String(generation._id)}-${Date.now()}` },
   );
 
   return NextResponse.json({ ok: true });

@@ -31,7 +31,6 @@ report() {
     printf "  %s%-9s%s  %sstopped%s\n" "$C_DIM" "$name" "$C_RESET" "$C_DIM" "$C_RESET"
     return
   fi
-  # rss in KB on macOS, etime is hh:mm:ss / mm:ss / d-hh:mm:ss
   local rss etime
   read -r rss etime < <(ps -o rss=,etime= -p "$pid" 2>/dev/null | awk '{print $1, $2}')
   local rss_mb="?"
@@ -41,26 +40,6 @@ report() {
 }
 report web
 report worker
-report tunnel
-
-# Tunnel URL
-banner "Tunnel URL"
-TUNNEL_URL=""
-if [ -f "$(log_file_for tunnel)" ]; then
-  TUNNEL_URL=$(grep -oE "https://[a-z0-9-]+\.trycloudflare\.com" "$(log_file_for tunnel)" 2>/dev/null | head -1 || true)
-fi
-ENV_URL=$(env_get S3_PUBLIC_ENDPOINT)
-
-if [ -n "$TUNNEL_URL" ]; then
-  printf "  Live tunnel       %s\n" "$TUNNEL_URL"
-fi
-if [ -n "$ENV_URL" ]; then
-  printf "  In .env.local     %s\n" "$ENV_URL"
-fi
-if [ -n "$TUNNEL_URL" ] && [ -n "$ENV_URL" ] && [ "$TUNNEL_URL" != "$ENV_URL" ]; then
-  warn "Live tunnel URL doesn't match .env.local — restart the worker (bash scripts/start.sh)"
-fi
-[ -z "$TUNNEL_URL" ] && [ -z "$ENV_URL" ] && log "no tunnel URL recorded"
 
 # HTTP probes
 banner "HTTP probes"
@@ -77,12 +56,10 @@ probe() {
 }
 probe "http://localhost:3000/"           "http://localhost:3000/"
 probe ".../api/usage"                    "http://localhost:3000/api/usage"
-# We don't probe a tunnel-side URL — there's no cheap probe that doesn't
-# require an existing storage key, and 4xx/200 both mean "tunnel is up".
 
-# Recent log tails for anything not running cleanly
+# Recent log tails
 banner "Recent log activity (last 3 lines each)"
-for n in web worker tunnel; do
+for n in web worker; do
   local_file=$(log_file_for "$n")
   if [ -f "$local_file" ]; then
     printf "\n  %s%s%s\n" "$C_DIM" "$local_file" "$C_RESET"
