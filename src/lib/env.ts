@@ -39,6 +39,11 @@ const schema = z.object({
 
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+
+  // Google Gemini for caption packs + image-prompt suggestions. Optional —
+  // the LLM features no-op gracefully if unset.
+  GEMINI_API_KEY: z.string().optional().default(""),
+  GEMINI_MODEL: z.string().default("gemini-2.5-flash"),
 });
 
 let cached: z.infer<typeof schema> | null = null;

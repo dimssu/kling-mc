@@ -105,6 +105,7 @@ export async function POST(req: Request) {
       modelName: input.modelName,
       aspectRatio: input.aspectRatio,
       n: input.n,
+      captionPackEnabled: input.captionPackEnabled,
       estimatedCostUsd: new Decimal(estimatedCost),
     },
   });

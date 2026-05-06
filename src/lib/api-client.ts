@@ -36,6 +36,15 @@ export type MediaAsset = {
   createdAt: string;
 };
 
+export type CaptionPackFields = {
+  captionPackEnabled: boolean;
+  caption: string | null;
+  captionTags: string[];
+  captionLocation: string | null;
+  captionAccessibility: string | null;
+  captionPackGeneratedAt: string | null;
+};
+
 export type Generation = {
   id: string;
   ownerId: string;
@@ -65,7 +74,7 @@ export type Generation = {
   sourceVideo?: MediaAsset;
   referenceImage?: MediaAsset;
   outputAsset?: MediaAsset | null;
-};
+} & CaptionPackFields;
 
 export type ImageGeneration = {
   id: string;
@@ -98,7 +107,7 @@ export type ImageGeneration = {
   sceneImage?: MediaAsset | null;
   styleImage?: MediaAsset | null;
   outputAsset?: MediaAsset | null;
-};
+} & CaptionPackFields;
 
 export type UsageSummary = {
   cost: { today: number; week: number; month: number; allTime: number; pending: number };
@@ -134,10 +143,15 @@ export const api = {
     characterOrientation: "image" | "video";
     keepOriginalSound: boolean;
     watermarkEnabled: boolean;
+    captionPackEnabled?: boolean;
   }) =>
     request<{ generation: Generation }>("/api/generations", {
       method: "POST",
       body: JSON.stringify(input),
+    }),
+  regenerateGenerationCaptionPack: (id: string) =>
+    request<{ generation: Generation }>(`/api/generations/${id}/caption-pack`, {
+      method: "POST",
     }),
   listGenerations: (params: { status?: string; favorite?: boolean } = {}) => {
     const sp = new URLSearchParams();
@@ -162,11 +176,22 @@ export const api = {
     modelName: "kling-v2" | "kling-v2-1";
     aspectRatio?: "16:9" | "9:16" | "1:1" | "4:3" | "3:4" | "3:2" | "2:3" | "21:9";
     n?: number;
+    captionPackEnabled?: boolean;
   }) =>
     request<{ imageGeneration: ImageGeneration }>("/api/image-generations", {
       method: "POST",
       body: JSON.stringify(input),
     }),
+  regenerateImageCaptionPack: (id: string) =>
+    request<{ imageGeneration: ImageGeneration }>(
+      `/api/image-generations/${id}/caption-pack`,
+      { method: "POST" },
+    ),
+  suggestImagePrompt: (params?: { avoidCategories?: string[] }) =>
+    request<{ prompt: string; categoryKey: string; categoryLabel: string; vibe: string }>(
+      `/api/image-generations/suggest-prompt`,
+      { method: "POST", body: JSON.stringify(params ?? {}) },
+    ),
   listImageGenerations: (params: { status?: string; favorite?: boolean } = {}) => {
     const sp = new URLSearchParams();
     if (params.status) sp.set("status", params.status);

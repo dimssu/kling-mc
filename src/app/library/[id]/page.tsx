@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatusPill } from "@/components/StatusPill";
 import { MediaThumb } from "@/components/MediaThumb";
+import { CaptionPackPanel } from "@/components/CaptionPackPanel";
 
 type Props = { params: Promise<{ id: string }> };
 
@@ -101,6 +102,8 @@ export default function GenerationDetailPage({ params }: Props) {
           <CardContent>{g.referenceImage && <MediaThumb asset={g.referenceImage} />}</CardContent>
         </Card>
       </div>
+
+      <CaptionPackPanel kind="video" row={g} />
 
       <Card>
         <CardHeader><CardTitle>Details</CardTitle></CardHeader>

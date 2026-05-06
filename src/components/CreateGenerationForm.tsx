@@ -41,6 +41,7 @@ export function CreateGenerationForm() {
   const [mode, setMode] = React.useState<"std" | "pro">("std");
   const [characterOrientation, setCharacterOrientation] = React.useState<"image" | "video">("image");
   const [keepOriginalSound, setKeepOriginalSound] = React.useState(true);
+  const [captionPackEnabled, setCaptionPackEnabled] = React.useState(true);
 
   const submit = useMutation({
     mutationFn: () => {
@@ -54,6 +55,7 @@ export function CreateGenerationForm() {
         characterOrientation,
         keepOriginalSound,
         watermarkEnabled: false,
+        captionPackEnabled,
       });
     },
     onSuccess: ({ generation }) => {
@@ -169,6 +171,20 @@ export function CreateGenerationForm() {
                 className="h-4 w-4 accent-[var(--color-accent)]"
               />
               Keep the original sound from the source video
+            </label>
+            <label className="flex items-start gap-2 text-sm sm:col-span-2">
+              <input
+                type="checkbox"
+                checked={captionPackEnabled}
+                onChange={(e) => setCaptionPackEnabled(e.target.checked)}
+                className="mt-0.5 h-4 w-4 accent-[var(--color-accent)]"
+              />
+              <span>
+                Generate a caption pack in Siya&apos;s voice
+                <span className="ml-1 text-xs text-[var(--color-fg-subtle)]">
+                  (caption · hashtags · location · alt text)
+                </span>
+              </span>
             </label>
           </CardContent>
         </Card>

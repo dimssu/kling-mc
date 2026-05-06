@@ -116,6 +116,7 @@ export async function POST(req: Request) {
       characterOrientation: input.characterOrientation,
       keepOriginalSound: input.keepOriginalSound,
       watermarkEnabled: input.watermarkEnabled,
+      captionPackEnabled: input.captionPackEnabled,
       estimatedCostUsd: new Decimal(estimatedCost),
     },
   });

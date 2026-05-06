@@ -3,7 +3,7 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, Loader2, Plus } from "lucide-react";
+import { ArrowRight, Loader2, Plus, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { api, type MediaAsset } from "@/lib/api-client";
 import { formatUsd } from "@/lib/utils";
@@ -43,6 +43,24 @@ export function CreateImageGenerationForm() {
   const [modelName, setModelName] = React.useState<"kling-v2" | "kling-v2-1">("kling-v2-1");
   const [aspectRatio, setAspectRatio] = React.useState<AspectRatio>("16:9");
   const [n, setN] = React.useState(1);
+  const [captionPackEnabled, setCaptionPackEnabled] = React.useState(true);
+  const [recentCategories, setRecentCategories] = React.useState<string[]>([]);
+  const [vibe, setVibe] = React.useState<string | null>(null);
+
+  const suggest = useMutation({
+    mutationFn: () =>
+      api.suggestImagePrompt({
+        // Avoid the last 3 categories so consecutive Suggest clicks roll a
+        // visibly different vibe.
+        avoidCategories: recentCategories.slice(-3),
+      }),
+    onSuccess: (s) => {
+      setPrompt(s.prompt);
+      setVibe(`${s.categoryLabel} · ${s.vibe}`);
+      setRecentCategories((prev) => [...prev, s.categoryKey].slice(-6));
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
 
   const subjectsFilled = subjects.filter((s): s is MediaAsset => !!s);
   const totalRefs =
@@ -60,6 +78,7 @@ export function CreateImageGenerationForm() {
         modelName,
         aspectRatio,
         n,
+        captionPackEnabled,
       });
     },
     onSuccess: ({ imageGeneration }) => {
@@ -174,16 +193,39 @@ export function CreateImageGenerationForm() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-1.5">
-              <Label htmlFor="prompt">Prompt</Label>
+              <div className="flex items-center justify-between gap-2">
+                <Label htmlFor="prompt">Prompt</Label>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => suggest.mutate()}
+                  disabled={suggest.isPending}
+                  title="Generate a fresh on-brand prompt"
+                >
+                  {suggest.isPending ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="h-3.5 w-3.5" />
+                  )}
+                  Suggest
+                </Button>
+              </div>
               <Textarea
                 id="prompt"
                 value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                placeholder="e.g. Wearing a flowing red dress on the grassland, in Ghibli style."
+                onChange={(e) => {
+                  setPrompt(e.target.value);
+                  setVibe(null);
+                }}
+                placeholder="Click Suggest for an on-brand idea, or type your own."
                 maxLength={2500}
-                rows={3}
+                rows={4}
               />
-              <p className="text-xs text-[var(--color-fg-subtle)]">{prompt.length}/2500</p>
+              <div className="flex items-center justify-between gap-2 text-xs text-[var(--color-fg-subtle)]">
+                <span>{prompt.length}/2500</span>
+                {vibe && <span className="italic">vibe: {vibe}</span>}
+              </div>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="neg-prompt">Negative prompt (optional)</Label>
@@ -241,6 +283,20 @@ export function CreateImageGenerationForm() {
                 </SelectContent>
               </Select>
             </div>
+            <label className="flex items-start gap-2 text-sm sm:col-span-3">
+              <input
+                type="checkbox"
+                checked={captionPackEnabled}
+                onChange={(e) => setCaptionPackEnabled(e.target.checked)}
+                className="mt-0.5 h-4 w-4 accent-[var(--color-accent)]"
+              />
+              <span>
+                Generate a caption pack in Siya&apos;s voice
+                <span className="ml-1 text-xs text-[var(--color-fg-subtle)]">
+                  (caption · hashtags · location · alt text)
+                </span>
+              </span>
+            </label>
           </CardContent>
         </Card>
       </div>

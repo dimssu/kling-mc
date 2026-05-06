@@ -115,6 +115,7 @@ export const createGenerationSchema = z.object({
   characterOrientation: z.enum(["image", "video"]),
   keepOriginalSound: z.boolean().default(true),
   watermarkEnabled: z.boolean().default(false),
+  captionPackEnabled: z.boolean().default(false),
 });
 
 export type CreateGenerationInput = z.infer<typeof createGenerationSchema>;
@@ -132,6 +133,7 @@ export const createImageGenerationSchema = z
       .optional(),
     // 1..9 generated images per task. v0 ships with 1.
     n: z.number().int().min(1).max(9).default(1),
+    captionPackEnabled: z.boolean().default(false),
   })
   .refine(
     (v) => v.subjectImageIds.length + (v.sceneImageId ? 1 : 0) + (v.styleImageId ? 1 : 0) >= 2,

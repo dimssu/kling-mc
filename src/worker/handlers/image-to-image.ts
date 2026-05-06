@@ -10,6 +10,7 @@ import { downloadToBuffer, getKlingFetchUrl, getPublicUrl, uploadObject } from "
 import { sniffMime, extForMime } from "@/lib/mime-sniff";
 import { getEnv } from "@/lib/env";
 import { signGid } from "@/lib/webhook-auth";
+import { generateCaptionPack, isLlmConfigured } from "@/lib/gemini";
 
 const POLL_PHASES: Array<{ untilSec: number; intervalMs: number }> = [
   { untilSec: 60, intervalMs: 5_000 },
@@ -233,6 +234,34 @@ async function finalizeSuccess(
   });
 
   log.info({ publicUrl: getPublicUrl(storageKey) }, "Image generation completed");
+
+  // Caption pack: post-finalize, never fatal.
+  if (imageGen.captionPackEnabled && isLlmConfigured()) {
+    try {
+      log.info("Generating caption pack");
+      const pack = await generateCaptionPack({
+        mediaKind: "image",
+        prompt: imageGen.prompt,
+        facts: { aspectRatio: imageGen.aspectRatio },
+      });
+      await prisma.imageGeneration.update({
+        where: { id: imageGenerationId },
+        data: {
+          caption: pack.caption,
+          captionTags: pack.tags,
+          captionLocation: pack.location,
+          captionAccessibility: pack.accessibilityText,
+          captionPackGeneratedAt: new Date(),
+        },
+      });
+      log.info("Caption pack saved");
+    } catch (err) {
+      log.warn(
+        { err: err instanceof Error ? err.message : String(err) },
+        "Caption pack generation failed (non-fatal)",
+      );
+    }
+  }
 }
 
 class RaceLostError extends Error {

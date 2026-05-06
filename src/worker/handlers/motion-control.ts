@@ -15,6 +15,7 @@ import {
 import { probeMedia } from "@/lib/media-probe";
 import { getEnv } from "@/lib/env";
 import { signGid } from "@/lib/webhook-auth";
+import { generateCaptionPack, isLlmConfigured } from "@/lib/gemini";
 
 const POLL_PHASES: Array<{ untilSec: number; intervalMs: number }> = [
   { untilSec: 60, intervalMs: 5_000 },
@@ -251,6 +252,35 @@ async function finalizeSuccess(
   });
 
   log.info({ publicUrl: getPublicUrl(storageKey) }, "Generation completed");
+
+  // Caption pack: generate after the row is committed. Failures here are
+  // logged but never fail the job — the media is the primary deliverable.
+  if (generation.captionPackEnabled && isLlmConfigured()) {
+    try {
+      log.info("Generating caption pack");
+      const pack = await generateCaptionPack({
+        mediaKind: "video",
+        prompt: generation.prompt,
+        facts: { durationSec: finalDuration },
+      });
+      await prisma.generation.update({
+        where: { id: generationId },
+        data: {
+          caption: pack.caption,
+          captionTags: pack.tags,
+          captionLocation: pack.location,
+          captionAccessibility: pack.accessibilityText,
+          captionPackGeneratedAt: new Date(),
+        },
+      });
+      log.info("Caption pack saved");
+    } catch (err) {
+      log.warn(
+        { err: err instanceof Error ? err.message : String(err) },
+        "Caption pack generation failed (non-fatal)",
+      );
+    }
+  }
 }
 
 class RaceLostError extends Error {

@@ -65,6 +65,16 @@ model Generation {
   submittedAt          DateTime?
   completedAt          DateTime?
 
+  // Caption pack — populated by the LLM after the media is ready, only when
+  // captionPackEnabled was set on the request. Stored alongside the row so
+  // we don't re-call the LLM on every page view.
+  captionPackEnabled     Boolean   @default(false)
+  caption                String?
+  captionTags            String[]
+  captionLocation        String?
+  captionAccessibility   String?
+  captionPackGeneratedAt DateTime?
+
   sourceVideo    MediaAsset  @relation("SourceVideo", fields: [sourceVideoId], references: [id])
   referenceImage MediaAsset  @relation("ReferenceImage", fields: [referenceImageId], references: [id])
   outputAsset    MediaAsset? @relation("Output", fields: [outputAssetId], references: [id])
@@ -103,6 +113,13 @@ model ImageGeneration {
   updatedAt          DateTime  @updatedAt
   submittedAt        DateTime?
   completedAt        DateTime?
+
+  captionPackEnabled     Boolean   @default(false)
+  caption                String?
+  captionTags            String[]
+  captionLocation        String?
+  captionAccessibility   String?
+  captionPackGeneratedAt DateTime?
 
   sceneImage  MediaAsset? @relation("ImageGenScene", fields: [sceneImageId], references: [id])
   styleImage  MediaAsset? @relation("ImageGenStyle", fields: [styleImageId], references: [id])

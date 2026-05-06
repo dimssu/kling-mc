@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatusPill } from "@/components/StatusPill";
 import { MediaThumb } from "@/components/MediaThumb";
+import { CaptionPackPanel } from "@/components/CaptionPackPanel";
 
 type Props = { params: Promise<{ id: string }> };
 
@@ -148,6 +149,8 @@ export default function ImageGenerationDetailPage({ params }: Props) {
           )}
         </CardContent>
       </Card>
+
+      <CaptionPackPanel kind="image" row={g} />
 
       <Card>
         <CardHeader><CardTitle>Details</CardTitle></CardHeader>
