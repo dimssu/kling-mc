@@ -24,7 +24,7 @@ import { getPublicUrl } from "@/lib/storage";
 
 type IngestBody = {
   kind: "image" | "video";
-  source: "generated";
+  source: "generated" | "uploaded";
   externalId: string;
   externalKind: string;
   s3Url: string;
