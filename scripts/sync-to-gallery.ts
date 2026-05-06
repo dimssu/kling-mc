@@ -68,6 +68,33 @@ async function main() {
   }
   await connectMongo();
 
+  // User uploads (source videos + reference images). These are the inputs
+  // the user fed to kling-mc — they're separate from the generated outputs
+  // already pushed below, and they show up under the "Uploaded" filter in
+  // the gallery.
+  console.log("→ Uploads");
+  const uploads = await MediaAsset.find({
+    kind: { $in: ["source_video", "reference_image"] },
+  }).lean();
+  for (const a of uploads) {
+    const isVideo = a.kind === "source_video";
+    const r = await postIngest({
+      kind: isVideo ? "video" : "image",
+      source: "uploaded",
+      externalId: `mc_upload_${String(a._id)}`,
+      externalKind: "media-asset",
+      s3Url: getPublicUrl(a.storageKey),
+      s3Key: a.storageKey,
+      filename: a.filename,
+      mimeType: a.mimeType,
+      sizeBytes: a.sizeBytes,
+      width: a.width ?? undefined,
+      height: a.height ?? undefined,
+      durationSec: a.durationSec ?? undefined,
+    });
+    console.log(`  · ${String(a._id)} (${a.kind})  ${r.ok ? "ok" : `failed: ${r.reason}`}`);
+  }
+
   // Motion-control videos
   console.log("→ Motion-control videos");
   const vids = await Generation.find({ status: "completed", outputAssetId: { $ne: null } }).lean();
