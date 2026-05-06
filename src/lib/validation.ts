@@ -1,4 +1,9 @@
 import { z } from "zod";
+import {
+  ALL_KLING_IMAGE_ENDPOINTS,
+  ALL_KLING_IMAGE_MODELS,
+  KLING_IMAGE_MODELS,
+} from "./kling/models";
 
 export const SUPPORTED_IMAGE_TYPES = [
   "image/jpeg",
@@ -122,12 +127,14 @@ export type CreateGenerationInput = z.infer<typeof createGenerationSchema>;
 
 export const createImageGenerationSchema = z
   .object({
+    endpoint: z.enum(ALL_KLING_IMAGE_ENDPOINTS).default("multi-image2image"),
     subjectImageIds: z.array(z.string().min(1)).min(1).max(4),
     sceneImageId: z.string().min(1).optional(),
     styleImageId: z.string().min(1).optional(),
     prompt: z.string().max(2500).optional(),
     negativePrompt: z.string().max(2500).optional(),
-    modelName: z.enum(["kling-v2", "kling-v2-1"]),
+    modelName: z.enum(ALL_KLING_IMAGE_MODELS),
+    imageReference: z.enum(["subject", "face"]).optional(),
     aspectRatio: z
       .enum(["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "2:3", "21:9"])
       .optional(),
@@ -136,12 +143,57 @@ export const createImageGenerationSchema = z
     captionPackEnabled: z.boolean().default(false),
   })
   .refine(
-    (v) => v.subjectImageIds.length + (v.sceneImageId ? 1 : 0) + (v.styleImageId ? 1 : 0) >= 2,
+    (v) => KLING_IMAGE_MODELS[v.modelName]?.pricePerImage[v.endpoint] != null,
     {
       message:
-        "Pick at least 2 reference images total across subjects, scene, and style.",
+        "This model isn't supported on the selected endpoint. Pick another model or switch endpoints.",
+      path: ["modelName"],
+    },
+  )
+  .refine(
+    (v) => {
+      if (v.endpoint !== "multi-image2image") return true;
+      return (
+        v.subjectImageIds.length +
+          (v.sceneImageId ? 1 : 0) +
+          (v.styleImageId ? 1 : 0) >=
+        2
+      );
+    },
+    {
+      message:
+        "Multi-image mode needs at least 2 reference images total (subjects + scene/style).",
       path: ["subjectImageIds"],
+    },
+  )
+  .refine(
+    (v) => v.endpoint !== "image2image" || (v.prompt && v.prompt.trim().length > 0),
+    {
+      message: "Single-image mode requires a prompt.",
+      path: ["prompt"],
     },
   );
 
 export type CreateImageGenerationInput = z.infer<typeof createImageGenerationSchema>;
+
+export const createCarouselSchema = z
+  .object({
+    subjectImageId: z.string().min(1),
+    n: z.number().int().min(4).max(10),
+    themePrompt: z.string().max(500).optional(),
+    endpoint: z.enum(ALL_KLING_IMAGE_ENDPOINTS).default("image2image"),
+    modelName: z.enum(ALL_KLING_IMAGE_MODELS),
+    imageReference: z.enum(["subject", "face"]).optional(),
+    aspectRatio: z
+      .enum(["16:9", "9:16", "1:1", "4:3", "3:4", "3:2", "2:3", "21:9"])
+      .optional(),
+  })
+  .refine(
+    (v) => KLING_IMAGE_MODELS[v.modelName]?.pricePerImage[v.endpoint] != null,
+    {
+      message: "This model isn't supported on the selected endpoint.",
+      path: ["modelName"],
+    },
+  );
+
+export type CreateCarouselInput = z.infer<typeof createCarouselSchema>;

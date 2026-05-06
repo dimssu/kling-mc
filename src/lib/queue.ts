@@ -4,6 +4,7 @@ import { getEnv } from "./env";
 
 export const MOTION_CONTROL_QUEUE = "motion-control" as const;
 export const IMAGE_GEN_QUEUE = "image-to-image" as const;
+export const CAROUSEL_FINALIZE_QUEUE = "carousel-finalize" as const;
 
 export type MotionControlJobData = {
   generationId: string;
@@ -11,6 +12,10 @@ export type MotionControlJobData = {
 
 export type ImageGenerationJobData = {
   imageGenerationId: string;
+};
+
+export type CarouselFinalizeJobData = {
+  carouselId: string;
 };
 
 let _connection: ConnectionOptions | null = null;
@@ -61,4 +66,22 @@ export function getImageGenerationQueue(): Queue<ImageGenerationJobData> {
     },
   });
   return _imageGenQueue;
+}
+
+let _carouselFinalizeQueue: Queue<CarouselFinalizeJobData> | null = null;
+export function getCarouselFinalizeQueue(): Queue<CarouselFinalizeJobData> {
+  if (_carouselFinalizeQueue) return _carouselFinalizeQueue;
+  _carouselFinalizeQueue = new Queue<CarouselFinalizeJobData>(
+    CAROUSEL_FINALIZE_QUEUE,
+    {
+      connection: getRedisConnection(),
+      defaultJobOptions: {
+        attempts: 3,
+        backoff: { type: "exponential", delay: 5000 },
+        removeOnComplete: { age: 3600 * 24, count: 500 },
+        removeOnFail: { age: 3600 * 24 * 7 },
+      },
+    },
+  );
+  return _carouselFinalizeQueue;
 }

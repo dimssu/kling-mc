@@ -109,6 +109,36 @@ export type ImageGeneration = {
   outputAsset?: MediaAsset | null;
 } & CaptionPackFields;
 
+export type CarouselSlide = ImageGeneration & {
+  carouselId: string | null;
+  slotIndex: number | null;
+  poseLabel: string | null;
+};
+
+export type Carousel = {
+  id: string;
+  ownerId: string;
+  status: "queued" | "processing" | "partial" | "completed" | "failed" | string;
+  n: number;
+  themePrompt: string | null;
+  vibeLabel: string | null;
+  subjectImageId: string;
+  modelName: string;
+  aspectRatio: string | null;
+  estimatedCostUsd: string | number;
+  caption: string | null;
+  captionTags: string[];
+  captionLocation: string | null;
+  captionAccessibility: string | null;
+  captionGeneratedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+  slides: CarouselSlide[];
+  // Resolved on the GET-by-id endpoint:
+  subjectImage?: MediaAsset | null;
+};
+
 export type UsageSummary = {
   cost: { today: number; week: number; month: number; allTime: number; pending: number };
   counts: Record<string, number>;
@@ -168,12 +198,19 @@ export const api = {
       body: JSON.stringify({ value }),
     }),
   createImageGeneration: (input: {
+    endpoint?: "multi-image2image" | "image2image";
     subjectImageIds: string[];
     sceneImageId?: string;
     styleImageId?: string;
     prompt?: string;
     negativePrompt?: string;
-    modelName: "kling-v2" | "kling-v2-1";
+    modelName:
+      | "kling-v1"
+      | "kling-v1-5"
+      | "kling-v2"
+      | "kling-v2-new"
+      | "kling-v2-1";
+    imageReference?: "subject" | "face";
     aspectRatio?: "16:9" | "9:16" | "1:1" | "4:3" | "3:4" | "3:2" | "2:3" | "21:9";
     n?: number;
     captionPackEnabled?: boolean;
@@ -216,4 +253,38 @@ export const api = {
       { method: "POST", body: JSON.stringify({ value }) },
     ),
   getUsage: () => request<UsageSummary>("/api/usage"),
+  createCarousel: (input: {
+    subjectImageId: string;
+    n: number;
+    themePrompt?: string;
+    endpoint?: "multi-image2image" | "image2image";
+    modelName:
+      | "kling-v1"
+      | "kling-v1-5"
+      | "kling-v2"
+      | "kling-v2-new"
+      | "kling-v2-1";
+    imageReference?: "subject" | "face";
+    aspectRatio?: "16:9" | "9:16" | "1:1" | "4:3" | "3:4" | "3:2" | "2:3" | "21:9";
+  }) =>
+    request<{ carousel: Carousel }>("/api/carousels", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  getCarousel: (id: string) =>
+    request<{ carousel: Carousel }>(`/api/carousels/${id}`),
+  listCarousels: (params: { status?: string } = {}) => {
+    const sp = new URLSearchParams();
+    if (params.status) sp.set("status", params.status);
+    return request<{ items: Carousel[]; nextCursor: string | null }>(
+      `/api/carousels?${sp}`,
+    );
+  },
+  deleteCarousel: (id: string) =>
+    request<{ ok: true }>(`/api/carousels/${id}`, { method: "DELETE" }),
+  retryCarouselSlide: (id: string, slotIndex: number) =>
+    request<{ ok: true }>(
+      `/api/carousels/${id}/slides/${slotIndex}/retry`,
+      { method: "POST" },
+    ),
 };

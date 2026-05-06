@@ -91,6 +91,10 @@ model ImageGeneration {
   provider           String    @default("kling_official")
   providerTaskId     String?   @unique
   externalTaskId     String    @unique
+  // Which Kling image endpoint to call. Drives request body shape + pricing.
+  // "multi-image2image" → /v1/images/multi-image2image (kling-v2/v2-1, ≥2 refs)
+  // "image2image"       → /v1/images/generations with image= (kling-v1/v1-5/v2/v2-new/v2-1)
+  endpoint           String    @default("multi-image2image")
   // Subjects: 1..4 MediaAsset IDs (Postgres native String[]). No FK because
   // Prisma can't model FK on array columns; orphans are fine for single-user.
   subjectImageIds    String[]
@@ -102,6 +106,9 @@ model ImageGeneration {
   modelName          String
   aspectRatio        String?
   n                  Int       @default(1)
+  // image_reference for /v1/images/generations on kling-v1-5 / kling-v2-1.
+  // "subject" focuses on identity; "face" prioritises facial likeness.
+  imageReference     String?
   estimatedCostUsd   Decimal   @db.Decimal(10, 4)
   actualCostUsd      Decimal?  @db.Decimal(10, 4)
   finalUnitDeduction String?
@@ -121,11 +128,56 @@ model ImageGeneration {
   captionAccessibility   String?
   captionPackGeneratedAt DateTime?
 
-  sceneImage  MediaAsset? @relation("ImageGenScene", fields: [sceneImageId], references: [id])
-  styleImage  MediaAsset? @relation("ImageGenStyle", fields: [styleImageId], references: [id])
-  outputAsset MediaAsset? @relation("ImageGenOutput", fields: [outputAssetId], references: [id])
+  // Carousel membership: when set, this row is one slide of an ImageCarousel.
+  // The parent owns the unified caption pack (per-slide captioning is skipped).
+  carouselId String?
+  slotIndex  Int?
+  poseLabel  String?
+
+  sceneImage  MediaAsset?    @relation("ImageGenScene", fields: [sceneImageId], references: [id])
+  styleImage  MediaAsset?    @relation("ImageGenStyle", fields: [styleImageId], references: [id])
+  outputAsset MediaAsset?    @relation("ImageGenOutput", fields: [outputAssetId], references: [id])
+  carousel    ImageCarousel? @relation("CarouselSlides", fields: [carouselId], references: [id], onDelete: Cascade)
 
   @@index([ownerId, status, createdAt])
   @@index([ownerId, isFavorite])
   @@index([status, submittedAt])
+  @@index([carouselId, slotIndex])
+}
+
+model ImageCarousel {
+  id                 String   @id @default(cuid())
+  ownerId            String
+  status             String   // queued | processing | partial | completed | failed
+  n                  Int
+  themePrompt        String?
+  vibeLabel          String?
+  // Single subject MediaAsset id. Same convention as ImageGeneration's
+  // subjectImageIds: stored as a string with no FK so cleanup is decoupled.
+  subjectImageId     String
+  modelName          String
+  // Endpoint used for every child slide. Defaults to image2image (single
+  // subject) since that's the natural fit for a carousel — a stylised pose
+  // pack from one source photo.
+  endpoint           String   @default("image2image")
+  imageReference     String?
+  aspectRatio        String?
+  estimatedCostUsd   Decimal  @db.Decimal(10, 4)
+
+  // Unified caption pack for the carousel as a whole; populated by the
+  // carousel-finalize worker after all slides reach a terminal state.
+  caption                String?
+  captionTags            String[]  @default([])
+  captionLocation        String?
+  captionAccessibility   String?
+  captionGeneratedAt     DateTime?
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  completedAt DateTime?
+
+  slides ImageGeneration[] @relation("CarouselSlides")
+
+  @@index([ownerId, createdAt])
+  @@index([status])
 }

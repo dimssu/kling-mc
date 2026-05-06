@@ -20,10 +20,24 @@ import {
 } from "@/components/ui/select";
 import { AssetSlot } from "@/components/AssetSlot";
 
-const IMAGE_PRICING: Record<string, number> = {
-  "kling-v2": 0.014,
-  "kling-v2-1": 0.020,
+type Endpoint = "multi-image2image" | "image2image";
+type Model = "kling-v1" | "kling-v1-5" | "kling-v2" | "kling-v2-new" | "kling-v2-1";
+
+const MODEL_PRICES: Record<Endpoint, Partial<Record<Model, { price: number; label: string }>>> = {
+  "image2image": {
+    "kling-v1":     { price: 0.0035, label: "Kling v1" },
+    "kling-v1-5":   { price: 0.028,  label: "Kling v1.5" },
+    "kling-v2":     { price: 0.028,  label: "Kling v2" },
+    "kling-v2-new": { price: 0.028,  label: "Kling v2 (restyle)" },
+    "kling-v2-1":   { price: 0.028,  label: "Kling v2.1" },
+  },
+  "multi-image2image": {
+    "kling-v2":   { price: 0.056, label: "Kling v2" },
+    "kling-v2-1": { price: 0.056, label: "Kling v2.1" },
+  },
 };
+
+const REF_SUPPORTED: Model[] = ["kling-v1-5", "kling-v2-1"];
 
 type AspectRatio = "16:9" | "9:16" | "1:1" | "4:3" | "3:4" | "3:2" | "2:3" | "21:9";
 
@@ -40,12 +54,22 @@ export function CreateImageGenerationForm() {
 
   const [prompt, setPrompt] = React.useState("");
   const [negativePrompt, setNegativePrompt] = React.useState("");
-  const [modelName, setModelName] = React.useState<"kling-v2" | "kling-v2-1">("kling-v2-1");
+  const [endpoint, setEndpoint] = React.useState<Endpoint>("multi-image2image");
+  const [modelName, setModelName] = React.useState<Model>("kling-v2-1");
+  const [imageReference, setImageReference] = React.useState<"subject" | "face">("subject");
   const [aspectRatio, setAspectRatio] = React.useState<AspectRatio>("16:9");
   const [n, setN] = React.useState(1);
   const [captionPackEnabled, setCaptionPackEnabled] = React.useState(true);
   const [recentCategories, setRecentCategories] = React.useState<string[]>([]);
   const [vibe, setVibe] = React.useState<string | null>(null);
+
+  // Snap the selected model to one supported on the current endpoint.
+  React.useEffect(() => {
+    if (!MODEL_PRICES[endpoint][modelName]) {
+      const first = Object.keys(MODEL_PRICES[endpoint])[0] as Model | undefined;
+      if (first) setModelName(first);
+    }
+  }, [endpoint, modelName]);
 
   const suggest = useMutation({
     mutationFn: () =>
@@ -69,14 +93,28 @@ export function CreateImageGenerationForm() {
 
   const submit = useMutation({
     mutationFn: () => {
-      if (totalRefs < 2) throw new Error("Pick at least 2 reference images total.");
+      if (endpoint === "multi-image2image" && totalRefs < 2) {
+        throw new Error("Pick at least 2 reference images total.");
+      }
+      if (endpoint === "image2image" && subjectsFilled.length === 0) {
+        throw new Error("Pick a subject image.");
+      }
+      if (endpoint === "image2image" && !prompt.trim()) {
+        throw new Error("Single-image mode needs a prompt.");
+      }
       return api.createImageGeneration({
+        endpoint,
         subjectImageIds: subjectsFilled.map((s) => s.id),
-        sceneImageId: sceneImage?.id,
-        styleImageId: styleImage?.id,
+        // Scene/style only apply on multi-image2image; drop them otherwise.
+        sceneImageId: endpoint === "multi-image2image" ? sceneImage?.id : undefined,
+        styleImageId: endpoint === "multi-image2image" ? styleImage?.id : undefined,
         prompt: prompt || undefined,
         negativePrompt: negativePrompt || undefined,
         modelName,
+        imageReference:
+          endpoint === "image2image" && REF_SUPPORTED.includes(modelName)
+            ? imageReference
+            : undefined,
         aspectRatio,
         n,
         captionPackEnabled,
@@ -91,9 +129,12 @@ export function CreateImageGenerationForm() {
     onError: (err: Error) => toast.error(err.message),
   });
 
-  const ratePerImage = IMAGE_PRICING[modelName] ?? 0;
+  const ratePerImage = MODEL_PRICES[endpoint][modelName]?.price ?? 0;
   const cost = ratePerImage * n;
-  const ready = totalRefs >= 2 && !submit.isPending;
+  const supportedModels = Object.keys(MODEL_PRICES[endpoint]) as Model[];
+  const refsOk = endpoint === "multi-image2image" ? totalRefs >= 2 : subjectsFilled.length >= 1;
+  const promptOk = endpoint === "image2image" ? prompt.trim().length > 0 : true;
+  const ready = refsOk && promptOk && !submit.isPending;
 
   const setSubjectAt = (i: number, a: MediaAsset | null) => {
     setSubjects((prev) => {
@@ -152,38 +193,40 @@ export function CreateImageGenerationForm() {
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>2 · Scene & style (optional)</CardTitle>
-            <CardDescription>
-              Kling needs <strong>at least 2 reference images total</strong> across
-              subjects, scene, and style. Add a scene or style image here, or a
-              second subject above.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-1">
-              <Label className="text-xs text-[var(--color-fg-muted)]">Scene image</Label>
-              <AssetSlot
-                kind="reference_image"
-                accept="image/png,image/jpeg"
-                asset={sceneImage}
-                onPick={setSceneImage}
-                emptyHint="Optional · sets background / environment"
-              />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs text-[var(--color-fg-muted)]">Style image</Label>
-              <AssetSlot
-                kind="reference_image"
-                accept="image/png,image/jpeg"
-                asset={styleImage}
-                onPick={setStyleImage}
-                emptyHint="Optional · sets aesthetic / look"
-              />
-            </div>
-          </CardContent>
-        </Card>
+        {endpoint === "multi-image2image" && (
+          <Card>
+            <CardHeader>
+              <CardTitle>2 · Scene & style (optional)</CardTitle>
+              <CardDescription>
+                Multi-image mode needs <strong>at least 2 reference images total</strong>{" "}
+                across subjects, scene, and style. Add a scene or style image here,
+                or a second subject above.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-1">
+                <Label className="text-xs text-[var(--color-fg-muted)]">Scene image</Label>
+                <AssetSlot
+                  kind="reference_image"
+                  accept="image/png,image/jpeg"
+                  asset={sceneImage}
+                  onPick={setSceneImage}
+                  emptyHint="Optional · sets background / environment"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs text-[var(--color-fg-muted)]">Style image</Label>
+                <AssetSlot
+                  kind="reference_image"
+                  accept="image/png,image/jpeg"
+                  asset={styleImage}
+                  onPick={setStyleImage}
+                  emptyHint="Optional · sets aesthetic / look"
+                />
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         <Card>
           <CardHeader>
@@ -248,15 +291,43 @@ export function CreateImageGenerationForm() {
           </CardHeader>
           <CardContent className="grid gap-4 sm:grid-cols-3">
             <div className="space-y-1.5">
-              <Label htmlFor="model">Model</Label>
-              <Select value={modelName} onValueChange={(v) => setModelName(v as typeof modelName)}>
-                <SelectTrigger id="model"><SelectValue /></SelectTrigger>
+              <Label htmlFor="endpoint">Mode</Label>
+              <Select value={endpoint} onValueChange={(v) => setEndpoint(v as Endpoint)}>
+                <SelectTrigger id="endpoint"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="kling-v2">Kling v2</SelectItem>
-                  <SelectItem value="kling-v2-1">Kling v2.1</SelectItem>
+                  <SelectItem value="multi-image2image">Multi-image (≥2 refs)</SelectItem>
+                  <SelectItem value="image2image">Single image + prompt</SelectItem>
                 </SelectContent>
               </Select>
             </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="model">Model</Label>
+              <Select value={modelName} onValueChange={(v) => setModelName(v as Model)}>
+                <SelectTrigger id="model"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {supportedModels.map((m) => (
+                    <SelectItem key={m} value={m}>
+                      {MODEL_PRICES[endpoint][m]!.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            {endpoint === "image2image" && REF_SUPPORTED.includes(modelName) && (
+              <div className="space-y-1.5">
+                <Label htmlFor="ref">Reference focus</Label>
+                <Select
+                  value={imageReference}
+                  onValueChange={(v) => setImageReference(v as "subject" | "face")}
+                >
+                  <SelectTrigger id="ref"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="subject">Subject</SelectItem>
+                    <SelectItem value="face">Face</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <div className="space-y-1.5">
               <Label htmlFor="aspect">Aspect ratio</Label>
               <Select value={aspectRatio} onValueChange={(v) => setAspectRatio(v as AspectRatio)}>
@@ -322,9 +393,16 @@ export function CreateImageGenerationForm() {
               <Row k="Model" v={modelName} />
               <Row k="Aspect" v={aspectRatio} />
             </dl>
-            {totalRefs < 2 && (
+            {!refsOk && (
               <p className="rounded-[var(--radius-md)] border border-[var(--color-warning)] bg-[color-mix(in_oklab,var(--color-warning)_15%,transparent)] px-3 py-2 text-xs text-[var(--color-warning)]">
-                Need at least 2 reference images total (subject + scene/style or two subjects).
+                {endpoint === "multi-image2image"
+                  ? "Need at least 2 reference images total (subject + scene/style or two subjects)."
+                  : "Pick one subject image to continue."}
+              </p>
+            )}
+            {endpoint === "image2image" && !promptOk && (
+              <p className="rounded-[var(--radius-md)] border border-[var(--color-warning)] bg-[color-mix(in_oklab,var(--color-warning)_15%,transparent)] px-3 py-2 text-xs text-[var(--color-warning)]">
+                Single-image mode needs a prompt — type one or click Suggest.
               </p>
             )}
             <Button

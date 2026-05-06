@@ -88,7 +88,11 @@ export async function POST(req: Request) {
     }
   }
 
-  const estimatedCost = estimateImageCostUsd(input.modelName as KlingImageModel, input.n);
+  const estimatedCost = estimateImageCostUsd(
+    input.modelName as KlingImageModel,
+    input.n,
+    input.endpoint,
+  );
   const externalTaskId = `kmc_img_${randomUUID().replace(/-/g, "")}`;
 
   const imageGeneration = await prisma.imageGeneration.create({
@@ -97,12 +101,14 @@ export async function POST(req: Request) {
       status: "queued",
       provider: "kling_official",
       externalTaskId,
+      endpoint: input.endpoint,
       subjectImageIds: input.subjectImageIds,
       sceneImageId: input.sceneImageId,
       styleImageId: input.styleImageId,
       prompt: input.prompt,
       negativePrompt: input.negativePrompt,
       modelName: input.modelName,
+      imageReference: input.imageReference,
       aspectRatio: input.aspectRatio,
       n: input.n,
       captionPackEnabled: input.captionPackEnabled,

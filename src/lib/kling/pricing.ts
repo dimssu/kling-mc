@@ -7,14 +7,17 @@ const RATE_USD_PER_5S: Record<KlingModel, Record<KlingMode, number>> = {
   "kling-v3": { std: 0.375, pro: 0.50 },
 };
 
-// Image-gen uses a different model namespace (kling-v2 / kling-v2-1) than
-// motion-control video (kling-v2-6 / kling-v3). Per-image rates below are
-// placeholders — override once you confirm your account's actual pricing.
-export type KlingImageModel = "kling-v2" | "kling-v2-1";
-const IMAGE_RATE_USD: Record<KlingImageModel, number> = {
-  "kling-v2": 0.014,
-  "kling-v2-1": 0.020,
-};
+// Image-gen uses a different model namespace from motion-control video.
+// Pricing varies per (model, endpoint) — see models.ts for the full registry.
+// This file re-exports the model type and adds USD-cost helpers.
+import {
+  type KlingImageEndpoint,
+  type KlingImageModel as RegistryImageModel,
+  KLING_IMAGE_MODELS,
+  pricePerImage,
+} from "./models";
+
+export type KlingImageModel = RegistryImageModel;
 
 export function estimateCostUsd(
   model: KlingModel,
@@ -40,8 +43,12 @@ export function deductionToUsd(
   return estimateCostUsd(model, mode, units);
 }
 
-export function estimateImageCostUsd(model: KlingImageModel, n = 1): number {
-  const rate = IMAGE_RATE_USD[model] ?? 0;
+export function estimateImageCostUsd(
+  model: KlingImageModel,
+  n = 1,
+  endpoint: KlingImageEndpoint = "multi-image2image",
+): number {
+  const rate = pricePerImage(model, endpoint);
   return Number((rate * Math.max(1, n)).toFixed(4));
 }
 
@@ -49,12 +56,13 @@ export function imageDeductionToUsd(
   model: KlingImageModel,
   finalUnitDeduction: string | null | undefined,
   n = 1,
+  endpoint: KlingImageEndpoint = "multi-image2image",
 ): number | null {
-  if (finalUnitDeduction == null) return estimateImageCostUsd(model, n);
+  const rate = pricePerImage(model, endpoint);
+  if (finalUnitDeduction == null) return estimateImageCostUsd(model, n, endpoint);
   const units = Number(finalUnitDeduction);
-  if (!Number.isFinite(units)) return estimateImageCostUsd(model, n);
-  // Treat each "unit" as one image at the model's rate.
-  return Number((units * (IMAGE_RATE_USD[model] ?? 0)).toFixed(4));
+  if (!Number.isFinite(units)) return estimateImageCostUsd(model, n, endpoint);
+  return Number((units * rate).toFixed(4));
 }
 
 export function pricingTable() {
@@ -62,5 +70,15 @@ export function pricingTable() {
 }
 
 export function imagePricingTable() {
-  return IMAGE_RATE_USD;
+  // Flatten the registry into a {model: rate} map keyed by primary endpoint
+  // so callers that don't care about endpoint dispatch still get useful data.
+  const out: Record<string, number> = {};
+  for (const [model, spec] of Object.entries(KLING_IMAGE_MODELS)) {
+    // Prefer the highest-fidelity endpoint price (multi-image2image > image2image).
+    out[model] =
+      spec.pricePerImage["multi-image2image"] ??
+      spec.pricePerImage["image2image"] ??
+      0;
+  }
+  return out;
 }

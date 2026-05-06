@@ -9,6 +9,7 @@ import type {
   KlingProvider,
   KlingTaskStatus,
   MotionControlInput,
+  SingleImage2ImageInput,
   TaskQueryResult,
 } from "./types";
 
@@ -17,6 +18,9 @@ import type {
 // array shape.
 const IMAGE_TO_IMAGE_CREATE_PATH = "/v1/images/multi-image2image";
 const IMAGE_TO_IMAGE_QUERY_PATH = "/v1/images/multi-image2image";
+// Single-subject image-to-image and text-to-image share Kling's
+// /v1/images/generations endpoint. We pass `image` to switch from t2i to i2i.
+const IMAGE_GENERATIONS_PATH = "/v1/images/generations";
 
 type KlingEnvelope<T> = {
   code: number;
@@ -151,24 +155,45 @@ class OfficialKlingProvider implements KlingProvider {
       "GET",
       `${IMAGE_TO_IMAGE_QUERY_PATH}/${encodeURIComponent(taskId)}`,
     );
+    return mapImageQuery(data);
+  }
 
-    const rawImages = data.task_result?.images ?? [];
-    const images = rawImages.map((img, i) => ({
-      index: img.index ?? i,
-      url: img.url,
-      watermarkUrl: img.watermark_url ?? null,
-    }));
+  async createSingleImage2ImageTask(
+    input: SingleImage2ImageInput,
+  ): Promise<CreateTaskResult> {
+    const body: Record<string, unknown> = {
+      model_name: input.modelName,
+      prompt: input.prompt,
+      image: input.imageUrl,
+      external_task_id: input.externalTaskId,
+    };
+    if (input.negativePrompt) body.negative_prompt = input.negativePrompt;
+    if (input.imageReference) body.image_reference = input.imageReference;
+    if (input.imageFidelity != null) body.image_fidelity = input.imageFidelity;
+    if (input.humanFidelity != null) body.human_fidelity = input.humanFidelity;
+    if (input.aspectRatio) body.aspect_ratio = input.aspectRatio;
+    if (input.n != null) body.n = input.n;
+    if (input.callbackUrl) body.callback_url = input.callbackUrl;
+
+    const data = await this.request<CreateData>(
+      "POST",
+      IMAGE_GENERATIONS_PATH,
+      body,
+    );
 
     return {
       providerTaskId: data.task_id,
-      externalTaskId: data.task_info?.external_task_id ?? null,
       status: data.task_status,
-      statusMessage: data.task_status_msg ?? null,
-      imageUrl: images[0]?.url ?? null,
-      images,
-      finalUnitDeduction: data.final_unit_deduction ?? null,
       rawPayload: data,
     };
+  }
+
+  async getSingleImage2ImageTask(taskId: string): Promise<ImageTaskQueryResult> {
+    const data = await this.request<ImageQueryData>(
+      "GET",
+      `${IMAGE_GENERATIONS_PATH}/${encodeURIComponent(taskId)}`,
+    );
+    return mapImageQuery(data);
   }
 
   private async request<T>(
@@ -223,6 +248,25 @@ class OfficialKlingProvider implements KlingProvider {
 
     return envelope.data;
   }
+}
+
+function mapImageQuery(data: ImageQueryData): ImageTaskQueryResult {
+  const rawImages = data.task_result?.images ?? [];
+  const images = rawImages.map((img, i) => ({
+    index: img.index ?? i,
+    url: img.url,
+    watermarkUrl: img.watermark_url ?? null,
+  }));
+  return {
+    providerTaskId: data.task_id,
+    externalTaskId: data.task_info?.external_task_id ?? null,
+    status: data.task_status,
+    statusMessage: data.task_status_msg ?? null,
+    imageUrl: images[0]?.url ?? null,
+    images,
+    finalUnitDeduction: data.final_unit_deduction ?? null,
+    rawPayload: data,
+  };
 }
 
 let _instance: OfficialKlingProvider | null = null;

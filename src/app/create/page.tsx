@@ -3,6 +3,7 @@
 import * as React from "react";
 import { CreateGenerationForm } from "@/components/CreateGenerationForm";
 import { CreateImageGenerationForm } from "@/components/CreateImageGenerationForm";
+import { CreateCarouselForm } from "@/components/CreateCarouselForm";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 
 export default function CreatePage() {
@@ -23,6 +24,7 @@ export default function CreatePage() {
         <TabsList>
           <TabsTrigger value="video">Motion control (video)</TabsTrigger>
           <TabsTrigger value="image">Image (image-to-image)</TabsTrigger>
+          <TabsTrigger value="carousel">Carousel</TabsTrigger>
         </TabsList>
         <TabsContent value="video">
           <p className="mb-4 max-w-prose text-sm text-[var(--color-fg-muted)]">
@@ -36,6 +38,13 @@ export default function CreatePage() {
             style transfer, and edits guided by language.
           </p>
           <CreateImageGenerationForm />
+        </TabsContent>
+        <TabsContent value="carousel">
+          <p className="mb-4 max-w-prose text-sm text-[var(--color-fg-muted)]">
+            Upload one photo and we&apos;ll plan a multi-slide carousel — same
+            person and aesthetic, a different pose or expression on each slide.
+          </p>
+          <CreateCarouselForm />
         </TabsContent>
       </Tabs>
     </div>

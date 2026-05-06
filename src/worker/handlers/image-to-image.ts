@@ -5,6 +5,9 @@ import { logger } from "@/lib/logger";
 import { getKlingProvider } from "@/lib/kling";
 import { KlingApiError } from "@/lib/kling/errors";
 import { imageDeductionToUsd, type KlingImageModel } from "@/lib/kling/pricing";
+import type {
+  KlingImageEndpoint,
+} from "@/lib/kling/models";
 import type { KlingImageAspectRatio } from "@/lib/kling/types";
 import { downloadToBuffer, getKlingFetchUrl, getPublicUrl, uploadObject } from "@/lib/storage";
 import { sniffMime, extForMime } from "@/lib/mime-sniff";
@@ -35,6 +38,8 @@ export async function handleImageGenerationJob(imageGenerationId: string): Promi
   const provider = getKlingProvider();
   let providerTaskId = imageGen.providerTaskId;
 
+  const endpoint = (imageGen.endpoint as KlingImageEndpoint) || "multi-image2image";
+
   if (!providerTaskId) {
     // Resolve subject MediaAssets in the order the user picked them.
     const subjects = await prisma.mediaAsset.findMany({
@@ -58,7 +63,12 @@ export async function handleImageGenerationJob(imageGenerationId: string): Promi
       : undefined;
 
     log.info(
-      { subjectCount: subjectImageUrls.length, hasScene: !!sceneImageUrl, hasStyle: !!styleImageUrl },
+      {
+        endpoint,
+        subjectCount: subjectImageUrls.length,
+        hasScene: !!sceneImageUrl,
+        hasStyle: !!styleImageUrl,
+      },
       "Resolved fetch URLs for Kling",
     );
 
@@ -67,22 +77,49 @@ export async function handleImageGenerationJob(imageGenerationId: string): Promi
         ? `${env.APP_BASE_URL.replace(/\/+$/, "")}/api/webhooks/kling?gid=${encodeURIComponent(imageGen.id)}&sig=${signGid(imageGen.id)}`
         : undefined;
 
-    log.info("Creating Kling image-to-image task");
     try {
-      const result = await provider.createImageToImageTask({
-        modelName: imageGen.modelName as KlingImageModel,
-        subjectImageUrls,
-        sceneImageUrl,
-        styleImageUrl,
-        prompt: imageGen.prompt ?? undefined,
-        negativePrompt: imageGen.negativePrompt ?? undefined,
-        aspectRatio: (imageGen.aspectRatio ?? undefined) as
-          | KlingImageAspectRatio
-          | undefined,
-        n: imageGen.n,
-        callbackUrl,
-        externalTaskId: imageGen.externalTaskId,
-      });
+      let result;
+      if (endpoint === "image2image") {
+        if (!subjectImageUrls[0]) {
+          await markFailed(imageGen.id, new Error("image2image requires a subject image"));
+          return;
+        }
+        if (!imageGen.prompt) {
+          await markFailed(imageGen.id, new Error("image2image requires a prompt"));
+          return;
+        }
+        log.info("Creating Kling single-image2image task");
+        result = await provider.createSingleImage2ImageTask({
+          modelName: imageGen.modelName as KlingImageModel,
+          imageUrl: subjectImageUrls[0],
+          prompt: imageGen.prompt,
+          negativePrompt: imageGen.negativePrompt ?? undefined,
+          imageReference:
+            (imageGen.imageReference as "subject" | "face" | null) ?? undefined,
+          aspectRatio: (imageGen.aspectRatio ?? undefined) as
+            | KlingImageAspectRatio
+            | undefined,
+          n: imageGen.n,
+          callbackUrl,
+          externalTaskId: imageGen.externalTaskId,
+        });
+      } else {
+        log.info("Creating Kling multi-image2image task");
+        result = await provider.createImageToImageTask({
+          modelName: imageGen.modelName as KlingImageModel,
+          subjectImageUrls,
+          sceneImageUrl,
+          styleImageUrl,
+          prompt: imageGen.prompt ?? undefined,
+          negativePrompt: imageGen.negativePrompt ?? undefined,
+          aspectRatio: (imageGen.aspectRatio ?? undefined) as
+            | KlingImageAspectRatio
+            | undefined,
+          n: imageGen.n,
+          callbackUrl,
+          externalTaskId: imageGen.externalTaskId,
+        });
+      }
       providerTaskId = result.providerTaskId;
       await prisma.imageGeneration.update({
         where: { id: imageGen.id },
@@ -99,12 +136,13 @@ export async function handleImageGenerationJob(imageGenerationId: string): Promi
     }
   }
 
-  await pollUntilTerminal(imageGen.id, providerTaskId, log);
+  await pollUntilTerminal(imageGen.id, providerTaskId, endpoint, log);
 }
 
 async function pollUntilTerminal(
   imageGenerationId: string,
   providerTaskId: string,
+  endpoint: KlingImageEndpoint,
   log: Logger,
 ): Promise<void> {
   const startedAt = Date.now();
@@ -118,7 +156,10 @@ async function pollUntilTerminal(
 
     let result;
     try {
-      result = await provider.getImageToImageTask(providerTaskId);
+      result =
+        endpoint === "image2image"
+          ? await provider.getSingleImage2ImageTask(providerTaskId)
+          : await provider.getImageToImageTask(providerTaskId);
     } catch (err) {
       if (err instanceof KlingApiError && err.retryable) {
         log.warn({ err: err.message, code: err.code }, "Retryable poll error, sleeping");
@@ -200,6 +241,7 @@ async function finalizeSuccess(
     imageGen.modelName as KlingImageModel,
     result.finalUnitDeduction,
     imageGen.n,
+    (imageGen.endpoint as KlingImageEndpoint) || "multi-image2image",
   );
 
   await prisma.$transaction(async (tx) => {

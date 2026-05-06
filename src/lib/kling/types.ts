@@ -1,4 +1,5 @@
-import type { KlingMode, KlingModel, KlingImageModel } from "./pricing";
+import type { KlingMode, KlingModel } from "./pricing";
+import type { KlingImageModel, KlingImageReference } from "./models";
 
 export type CharacterOrientation = "image" | "video";
 
@@ -31,6 +32,25 @@ export type ImageToImageInput = {
   negativePrompt?: string;
   aspectRatio?: KlingImageAspectRatio;
   n?: number; // 1–9, default 1
+  callbackUrl?: string;
+  externalTaskId: string;
+};
+
+/**
+ * Input for /v1/images/generations with `image` set — i.e. single-subject
+ * image-to-image. Same endpoint also handles text-to-image when `imageUrl`
+ * is omitted, but we don't expose that mode yet.
+ */
+export type SingleImage2ImageInput = {
+  modelName: KlingImageModel;
+  imageUrl: string;
+  prompt: string; // Required by Kling on this endpoint.
+  negativePrompt?: string;
+  imageReference?: KlingImageReference; // kling-v1-5 / kling-v2-1 only
+  imageFidelity?: number; // 0..1, defaults Kling-side to 0.5
+  humanFidelity?: number; // 0..1, face-reference only
+  aspectRatio?: KlingImageAspectRatio;
+  n?: number; // 1..9
   callbackUrl?: string;
   externalTaskId: string;
 };
@@ -79,4 +99,6 @@ export interface KlingProvider {
   getMotionControlTask(taskId: string): Promise<TaskQueryResult>;
   createImageToImageTask(input: ImageToImageInput): Promise<CreateTaskResult>;
   getImageToImageTask(taskId: string): Promise<ImageTaskQueryResult>;
+  createSingleImage2ImageTask(input: SingleImage2ImageInput): Promise<CreateTaskResult>;
+  getSingleImage2ImageTask(taskId: string): Promise<ImageTaskQueryResult>;
 }

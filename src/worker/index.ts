@@ -11,21 +11,24 @@ import { logger } from "@/lib/logger";
 import {
   MOTION_CONTROL_QUEUE,
   IMAGE_GEN_QUEUE,
+  CAROUSEL_FINALIZE_QUEUE,
   getMotionControlQueue,
   getImageGenerationQueue,
   getRedisConnection,
   type MotionControlJobData,
   type ImageGenerationJobData,
+  type CarouselFinalizeJobData,
 } from "@/lib/queue";
 import { handleMotionControlJob } from "./handlers/motion-control";
 import { handleImageGenerationJob } from "./handlers/image-to-image";
+import { handleCarouselFinalizeJob } from "./handlers/carousel-finalize";
 import { prisma } from "@/lib/db";
 
 async function main() {
   const env = getEnv();
   logger.info(
     {
-      queues: [MOTION_CONTROL_QUEUE, IMAGE_GEN_QUEUE],
+      queues: [MOTION_CONTROL_QUEUE, IMAGE_GEN_QUEUE, CAROUSEL_FINALIZE_QUEUE],
       concurrency: env.MAX_CONCURRENT_GENERATIONS,
       kling: env.KLING_BASE_URL,
     },
@@ -59,7 +62,18 @@ async function main() {
     { connection: getRedisConnection(), concurrency: env.MAX_CONCURRENT_GENERATIONS },
   );
 
-  const workers = [motionWorker, imageWorker];
+  const carouselFinalizeWorker = new Worker<CarouselFinalizeJobData>(
+    CAROUSEL_FINALIZE_QUEUE,
+    async (job) => {
+      const log = logger.child({ jobId: job.id, carouselId: job.data.carouselId });
+      log.info("Picked up carousel-finalize job");
+      await handleCarouselFinalizeJob(job.data.carouselId);
+      log.info("Carousel-finalize job done");
+    },
+    { connection: getRedisConnection(), concurrency: 2 },
+  );
+
+  const workers = [motionWorker, imageWorker, carouselFinalizeWorker];
 
   motionWorker.on("failed", (job, err) =>
     logger.error(
@@ -71,6 +85,12 @@ async function main() {
     logger.error(
       { jobId: job?.id, imageGenerationId: job?.data?.imageGenerationId, err: err.message },
       "Image-generation job failed",
+    ),
+  );
+  carouselFinalizeWorker.on("failed", (job, err) =>
+    logger.error(
+      { jobId: job?.id, carouselId: job?.data?.carouselId, err: err.message },
+      "Carousel-finalize job failed",
     ),
   );
   for (const w of workers) {
