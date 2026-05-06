@@ -188,7 +188,13 @@ export const api = {
       { method: "POST" },
     ),
   suggestImagePrompt: (params?: { avoidCategories?: string[] }) =>
-    request<{ prompt: string; categoryKey: string; categoryLabel: string; vibe: string }>(
+    request<{
+      prompt: string;
+      negativePrompt: string;
+      categoryKey: string;
+      categoryLabel: string;
+      vibe: string;
+    }>(
       `/api/image-generations/suggest-prompt`,
       { method: "POST", body: JSON.stringify(params ?? {}) },
     ),

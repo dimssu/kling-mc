@@ -56,6 +56,7 @@ export function CreateImageGenerationForm() {
       }),
     onSuccess: (s) => {
       setPrompt(s.prompt);
+      if (s.negativePrompt) setNegativePrompt(s.negativePrompt);
       setVibe(`${s.categoryLabel} · ${s.vibe}`);
       setRecentCategories((prev) => [...prev, s.categoryKey].slice(-6));
     },

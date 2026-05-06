@@ -119,6 +119,7 @@ export async function generateCaptionPack(input: CaptionPackInput): Promise<Capt
 
 export type SuggestedPrompt = {
   prompt: string;
+  negativePrompt: string;
   categoryKey: string;
   categoryLabel: string;
   vibe: string;
@@ -126,9 +127,10 @@ export type SuggestedPrompt = {
 
 const PROMPT_SCHEMA = {
   type: Type.OBJECT,
-  required: ["prompt", "vibe"],
+  required: ["prompt", "negativePrompt", "vibe"],
   properties: {
     prompt: { type: Type.STRING },
+    negativePrompt: { type: Type.STRING },
     vibe: { type: Type.STRING },
   },
 };
@@ -138,7 +140,8 @@ const PROMPT_RULES = [
   "Be visual and specific: lighting, time of day, location, wardrobe, pose, framing, lens feel, mood. Avoid abstract adjectives.",
   "She is the only subject unless the category implies otherwise. Always cohesive with her brand.",
   "Do NOT invent ages, names, or product names. Do NOT include hashtags or social copy.",
-  "End with a one-line camera/lens hint (e.g. '85mm portrait, shallow depth of field, soft natural light').",
+  "End the prompt with a one-line camera/lens hint (e.g. '85mm portrait, shallow depth of field, soft natural light').",
+  "Also produce a tight negativePrompt (10–25 short phrases, comma-separated) that suppresses common image-gen failure modes for this scene: things like deformed hands, extra fingers, low quality, blurry, oversaturated, plastic skin, multiple people, watermark, text. Tailor a couple of items to the category (e.g. for night scenes add 'harsh flash, overexposed', for café shots add 'stock photo, cluttered table').",
 ];
 
 /**
@@ -170,7 +173,7 @@ export async function suggestImagePrompt(opts?: {
     "Rules:",
     ...PROMPT_RULES.map((r) => `- ${r}`),
     "",
-    "Return strict JSON: { prompt: string, vibe: string }. The 'vibe' field is 3-6 words describing the post's mood (e.g. 'quiet rooftop confidence').",
+    "Return strict JSON: { prompt: string, negativePrompt: string, vibe: string }. The 'vibe' field is 3-6 words describing the post's mood (e.g. 'quiet rooftop confidence').",
   ].join("\n");
 
   const res = await client.models.generateContent({
@@ -185,15 +188,16 @@ export async function suggestImagePrompt(opts?: {
   });
 
   const text = res.text ?? "";
-  let parsed: { prompt?: string; vibe?: string };
+  let parsed: { prompt?: string; negativePrompt?: string; vibe?: string };
   try {
-    parsed = JSON.parse(text) as { prompt?: string; vibe?: string };
+    parsed = JSON.parse(text) as { prompt?: string; negativePrompt?: string; vibe?: string };
   } catch (err) {
     logger.warn({ err: err instanceof Error ? err.message : err, text }, "Gemini prompt JSON parse failed");
     throw new Error("Couldn't parse the suggestion. Try again.");
   }
   return {
     prompt: String(parsed.prompt ?? "").trim(),
+    negativePrompt: String(parsed.negativePrompt ?? "").trim(),
     categoryKey: cat.key,
     categoryLabel: cat.label,
     vibe: String(parsed.vibe ?? "").trim(),
