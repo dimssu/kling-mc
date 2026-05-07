@@ -57,7 +57,16 @@ async function main() {
       await handleMotionControlJob(job.data.generationId);
       log.info("Motion-control job done");
     },
-    { connection: getRedisConnection(), concurrency: env.MAX_CONCURRENT_GENERATIONS },
+    {
+      connection: getRedisConnection(),
+      concurrency: env.MAX_CONCURRENT_GENERATIONS,
+      // Polling jobs sleep up to 30 s between Kling status checks. Default
+      // lockDuration is 30 s, so a single sleep can outlast the lock and BullMQ
+      // moves the job back to delayed mid-flight. Five minutes leaves ample
+      // headroom (incl. laptop-sleep blips); BullMQ auto-renews at half this.
+      lockDuration: 5 * 60_000,
+      stalledInterval: 60_000,
+    },
   );
 
   const imageWorker = new Worker<ImageGenerationJobData>(
@@ -71,7 +80,12 @@ async function main() {
       await handleImageGenerationJob(job.data.imageGenerationId);
       log.info("Image-generation job done");
     },
-    { connection: getRedisConnection(), concurrency: env.MAX_CONCURRENT_GENERATIONS },
+    {
+      connection: getRedisConnection(),
+      concurrency: env.MAX_CONCURRENT_GENERATIONS,
+      lockDuration: 5 * 60_000,
+      stalledInterval: 60_000,
+    },
   );
 
   const carouselFinalizeWorker = new Worker<CarouselFinalizeJobData>(
@@ -96,7 +110,12 @@ async function main() {
       await handleMultiImageVideoJob(job.data.videoGenerationId);
       log.info("Multi-image-to-video job done");
     },
-    { connection: getRedisConnection(), concurrency: env.MAX_CONCURRENT_GENERATIONS },
+    {
+      connection: getRedisConnection(),
+      concurrency: env.MAX_CONCURRENT_GENERATIONS,
+      lockDuration: 5 * 60_000,
+      stalledInterval: 60_000,
+    },
   );
 
   const workers = [motionWorker, imageWorker, carouselFinalizeWorker, videoFromImagesWorker];
