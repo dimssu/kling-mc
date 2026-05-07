@@ -20,6 +20,7 @@ export async function GET(_req: Request, ctx: Ctx) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
   const ids = [...videoGen.referenceImageIds];
+  if (videoGen.tailImageId) ids.push(videoGen.tailImageId);
   if (videoGen.outputAssetId) ids.push(videoGen.outputAssetId);
   const assets = await MediaAsset.find({ _id: { $in: ids } }).lean();
   const m = new Map(assets.map((a) => [String(a._id), a]));
@@ -27,6 +28,7 @@ export async function GET(_req: Request, ctx: Ctx) {
     videoGeneration: toApi({
       ...videoGen,
       referenceImages: videoGen.referenceImageIds.map((rid) => m.get(rid) ?? null),
+      tailImage: videoGen.tailImageId ? (m.get(videoGen.tailImageId) ?? null) : null,
       outputAsset: videoGen.outputAssetId ? (m.get(videoGen.outputAssetId) ?? null) : null,
     }),
   });

@@ -51,6 +51,7 @@ export default function VideoFromImagesDetailPage({ params }: Props) {
   }
 
   const refs = (g.referenceImages ?? []).filter((x): x is NonNullable<typeof x> => !!x);
+  const hasTail = !!g.tailImage;
 
   return (
     <div className="mx-auto w-full max-w-5xl space-y-6">
@@ -100,14 +101,23 @@ export default function VideoFromImagesDetailPage({ params }: Props) {
       {refs.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle>Reference images</CardTitle>
-            <CardDescription>{refs.length} image{refs.length === 1 ? "" : "s"}</CardDescription>
+            <CardTitle>
+              {g.endpoint === "image2video" ? "Start image" : "Reference images"}
+            </CardTitle>
+            <CardDescription>
+              {g.endpoint === "image2video"
+                ? hasTail
+                  ? "Start frame (left) + end frame (right)"
+                  : "Single start frame"
+                : `${refs.length} image${refs.length === 1 ? "" : "s"}`}
+            </CardDescription>
           </CardHeader>
           <CardContent>
             <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-4">
               {refs.map((a) => (
                 <MediaThumb key={a.id} asset={a} />
               ))}
+              {g.tailImage && <MediaThumb key={g.tailImage.id} asset={g.tailImage} />}
             </div>
           </CardContent>
         </Card>
@@ -117,9 +127,11 @@ export default function VideoFromImagesDetailPage({ params }: Props) {
         <CardHeader><CardTitle>Details</CardTitle></CardHeader>
         <CardContent>
           <dl className="grid gap-3 sm:grid-cols-2">
+            <Detail k="Endpoint" v={g.endpoint} />
             <Detail k="Model" v={g.modelName} />
             <Detail k="Mode" v={g.mode} />
             <Detail k="Aspect ratio" v={g.aspectRatio} />
+            {g.cfgScale != null && <Detail k="CFG scale" v={String(g.cfgScale)} />}
             <Detail k="Requested duration" v={`${g.duration} s`} />
             <Detail k="Output duration" v={formatDuration(g.outputAsset?.durationSec)} />
             <Detail k="Estimated cost" v={formatUsd(Number(g.estimatedCostUsd))} />

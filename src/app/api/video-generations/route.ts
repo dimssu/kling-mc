@@ -5,8 +5,13 @@ import { VideoGeneration, MediaAsset } from "@/models";
 import { getEnv } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { getVideoGenerationQueue } from "@/lib/queue";
-import { estimateMultiImage2VideoCostUsd } from "@/lib/kling/pricing";
+import {
+  estimateImage2VideoCostUsd,
+  estimateMultiImage2VideoCostUsd,
+} from "@/lib/kling/pricing";
 import type {
+  KlingImage2VideoMode,
+  KlingImage2VideoModel,
   KlingMultiImage2VideoMode,
   KlingMultiImage2VideoModel,
 } from "@/lib/kling/types";
@@ -51,6 +56,7 @@ export async function GET(req: Request) {
   const assetIds = new Set<string>();
   for (const g of trimmed) {
     for (const id of g.referenceImageIds) assetIds.add(id);
+    if (g.tailImageId) assetIds.add(g.tailImageId);
     if (g.outputAssetId) assetIds.add(g.outputAssetId);
   }
   const assets = await MediaAsset.find({ _id: { $in: [...assetIds] } }).lean();
@@ -58,6 +64,7 @@ export async function GET(req: Request) {
   const enriched = trimmed.map((g) => ({
     ...g,
     referenceImages: g.referenceImageIds.map((id) => m.get(id) ?? null),
+    tailImage: g.tailImageId ? (m.get(g.tailImageId) ?? null) : null,
     outputAsset: g.outputAssetId ? (m.get(g.outputAssetId) ?? null) : null,
   }));
 
@@ -86,13 +93,19 @@ export async function POST(req: Request) {
   }
   const input = parsed.data;
 
+  // Collect referenced asset IDs for fetch + validation, branched by endpoint.
+  const refIds: string[] =
+    input.endpoint === "image2video"
+      ? [input.imageId, ...(input.tailImageId ? [input.tailImageId] : [])]
+      : input.imageIds;
+
   const assets = await MediaAsset.find({
-    _id: { $in: input.imageIds },
+    _id: { $in: refIds },
     ownerId: env.DEFAULT_USER_ID,
   }).lean();
   const byId = new Map(assets.map((a) => [String(a._id), a]));
 
-  for (const id of input.imageIds) {
+  for (const id of refIds) {
     const a = byId.get(id);
     if (!a || a.kind !== "reference_image") {
       return NextResponse.json({ error: `referenceImage not found: ${id}` }, { status: 400 });
@@ -108,21 +121,39 @@ export async function POST(req: Request) {
     }
   }
 
-  const estimatedCost = estimateMultiImage2VideoCostUsd(
-    input.modelName as KlingMultiImage2VideoModel,
-    input.mode as KlingMultiImage2VideoMode,
-    Number(input.duration),
-  );
+  const durationSec = Number(input.duration);
+  const estimatedCost =
+    input.endpoint === "image2video"
+      ? estimateImage2VideoCostUsd(
+          input.modelName as KlingImage2VideoModel,
+          input.mode as KlingImage2VideoMode,
+          durationSec,
+        )
+      : estimateMultiImage2VideoCostUsd(
+          input.modelName as KlingMultiImage2VideoModel,
+          input.mode as KlingMultiImage2VideoMode,
+          durationSec,
+        );
 
-  const externalTaskId = `kmc_miv_${randomUUID().replace(/-/g, "")}`;
+  const externalTaskId =
+    input.endpoint === "image2video"
+      ? `kmc_i2v_${randomUUID().replace(/-/g, "")}`
+      : `kmc_miv_${randomUUID().replace(/-/g, "")}`;
+
+  const referenceImageIds =
+    input.endpoint === "image2video" ? [input.imageId] : input.imageIds;
 
   const created = await VideoGeneration.create({
     ownerId: env.DEFAULT_USER_ID,
     status: "queued",
     provider: "kling_official",
     externalTaskId,
-    referenceImageIds: input.imageIds,
-    prompt: input.prompt,
+    endpoint: input.endpoint,
+    referenceImageIds,
+    tailImageId:
+      input.endpoint === "image2video" ? (input.tailImageId ?? null) : null,
+    cfgScale: input.endpoint === "image2video" ? (input.cfgScale ?? null) : null,
+    prompt: input.prompt ?? null,
     negativePrompt: input.negativePrompt ?? null,
     modelName: input.modelName,
     mode: input.mode,
@@ -143,9 +174,10 @@ export async function POST(req: Request) {
     {
       videoGenerationId: String(created._id),
       externalTaskId,
-      refs: input.imageIds.length,
+      endpoint: input.endpoint,
+      refs: referenceImageIds.length,
     },
-    "Multi-image video generation enqueued",
+    "Video generation enqueued",
   );
 
   return NextResponse.json(

@@ -4,8 +4,14 @@ import { VideoGeneration, MediaAsset } from "@/models";
 import { logger } from "@/lib/logger";
 import { getKlingProvider } from "@/lib/kling";
 import { KlingApiError } from "@/lib/kling/errors";
-import { multiImage2VideoDeductionToUsd } from "@/lib/kling/pricing";
+import {
+  image2VideoDeductionToUsd,
+  multiImage2VideoDeductionToUsd,
+} from "@/lib/kling/pricing";
 import type {
+  KlingImage2VideoDuration,
+  KlingImage2VideoMode,
+  KlingImage2VideoModel,
   KlingMultiImage2VideoDuration,
   KlingMultiImage2VideoMode,
   KlingMultiImage2VideoModel,
@@ -42,11 +48,16 @@ export async function handleMultiImageVideoJob(videoGenerationId: string): Promi
 
   const provider = getKlingProvider();
   let providerTaskId = videoGen.providerTaskId;
+  const endpoint = (videoGen.endpoint ?? "multi-image2video") as
+    | "multi-image2video"
+    | "image2video";
 
   if (!providerTaskId) {
-    const assets = await MediaAsset.find({
-      _id: { $in: videoGen.referenceImageIds },
-    }).lean();
+    const refIds = [
+      ...videoGen.referenceImageIds,
+      ...(videoGen.tailImageId ? [videoGen.tailImageId] : []),
+    ];
+    const assets = await MediaAsset.find({ _id: { $in: refIds } }).lean();
     const byId = new Map(assets.map((a) => [String(a._id), a]));
 
     const imageUrls: string[] = [];
@@ -58,27 +69,61 @@ export async function handleMultiImageVideoJob(videoGenerationId: string): Promi
       }
       imageUrls.push(getKlingFetchUrl(a.storageKey));
     }
+    const tailImageUrl = videoGen.tailImageId
+      ? (() => {
+          const a = byId.get(videoGen.tailImageId!);
+          return a ? getKlingFetchUrl(a.storageKey) : undefined;
+        })()
+      : undefined;
 
-    log.info({ imageCount: imageUrls.length }, "Resolved fetch URLs for Kling");
+    log.info(
+      { endpoint, imageCount: imageUrls.length, hasTail: !!tailImageUrl },
+      "Resolved fetch URLs for Kling",
+    );
 
     try {
-      const result = await provider.createMultiImage2VideoTask({
-        modelName: videoGen.modelName as KlingMultiImage2VideoModel,
-        mode: videoGen.mode as KlingMultiImage2VideoMode,
-        duration: videoGen.duration as KlingMultiImage2VideoDuration,
-        aspectRatio: videoGen.aspectRatio as KlingVideoAspectRatio,
-        imageUrls,
-        prompt: videoGen.prompt ?? "",
-        negativePrompt: videoGen.negativePrompt ?? undefined,
-        watermarkEnabled: videoGen.watermarkEnabled,
-        externalTaskId: videoGen.externalTaskId,
-      });
-      providerTaskId = result.providerTaskId;
+      let providerResult;
+      if (endpoint === "image2video") {
+        if (imageUrls.length !== 1) {
+          await markFailed(
+            videoGen._id,
+            new Error("image2video requires exactly one start image"),
+          );
+          return;
+        }
+        providerResult = await provider.createImage2VideoTask({
+          modelName: videoGen.modelName as KlingImage2VideoModel,
+          mode: videoGen.mode as KlingImage2VideoMode,
+          duration: videoGen.duration as KlingImage2VideoDuration,
+          aspectRatio: videoGen.aspectRatio as KlingVideoAspectRatio,
+          imageUrl: imageUrls[0],
+          tailImageUrl,
+          prompt: videoGen.prompt ?? undefined,
+          negativePrompt: videoGen.negativePrompt ?? undefined,
+          cfgScale: videoGen.cfgScale ?? undefined,
+          watermarkEnabled: videoGen.watermarkEnabled,
+          externalTaskId: videoGen.externalTaskId,
+        });
+        log.info({ providerTaskId: providerResult.providerTaskId }, "Kling image2video task created");
+      } else {
+        providerResult = await provider.createMultiImage2VideoTask({
+          modelName: videoGen.modelName as KlingMultiImage2VideoModel,
+          mode: videoGen.mode as KlingMultiImage2VideoMode,
+          duration: videoGen.duration as KlingMultiImage2VideoDuration,
+          aspectRatio: videoGen.aspectRatio as KlingVideoAspectRatio,
+          imageUrls,
+          prompt: videoGen.prompt ?? "",
+          negativePrompt: videoGen.negativePrompt ?? undefined,
+          watermarkEnabled: videoGen.watermarkEnabled,
+          externalTaskId: videoGen.externalTaskId,
+        });
+        log.info({ providerTaskId: providerResult.providerTaskId }, "Kling multi-image2video task created");
+      }
+      providerTaskId = providerResult.providerTaskId;
       await VideoGeneration.updateOne(
         { _id: videoGen._id },
         { $set: { providerTaskId, status: "processing", submittedAt: new Date() } },
       );
-      log.info({ providerTaskId }, "Kling multi-image2video task created");
     } catch (err) {
       const retryable = err instanceof KlingApiError && err.retryable;
       if (!retryable) {
@@ -89,12 +134,13 @@ export async function handleMultiImageVideoJob(videoGenerationId: string): Promi
     }
   }
 
-  await pollUntilTerminal(videoGen._id, providerTaskId, log);
+  await pollUntilTerminal(videoGen._id, providerTaskId, endpoint, log);
 }
 
 async function pollUntilTerminal(
   videoGenerationId: string,
   providerTaskId: string,
+  endpoint: "multi-image2video" | "image2video",
   log: Logger,
 ): Promise<void> {
   const startedAt = Date.now();
@@ -108,7 +154,10 @@ async function pollUntilTerminal(
 
     let result;
     try {
-      result = await provider.getMultiImage2VideoTask(providerTaskId);
+      result =
+        endpoint === "image2video"
+          ? await provider.getImage2VideoTask(providerTaskId)
+          : await provider.getMultiImage2VideoTask(providerTaskId);
     } catch (err) {
       if (err instanceof KlingApiError && err.retryable) {
         log.warn({ err: err.message, code: err.code }, "Retryable poll error, sleeping");
@@ -161,6 +210,8 @@ async function finalizeSuccess(
   result: Awaited<ReturnType<ReturnType<typeof getKlingProvider>["getMultiImage2VideoTask"]>>,
   log: Logger,
 ): Promise<void> {
+  // Image2video and multi-image2video share the TaskQueryResult shape, so this
+  // function works for both. The branch on endpoint only matters for cost calc.
   if (!result.videoUrl) {
     await VideoGeneration.updateOne(
       { _id: videoGenerationId },
@@ -208,12 +259,21 @@ async function finalizeSuccess(
     probedDuration ??
     (Number.isFinite(result.videoDurationSec ?? NaN) ? result.videoDurationSec : null);
 
-  const actualCostUsd = multiImage2VideoDeductionToUsd(
-    videoGen.modelName as KlingMultiImage2VideoModel,
-    videoGen.mode as KlingMultiImage2VideoMode,
-    result.finalUnitDeduction,
-    finalDuration ?? Number(videoGen.duration ?? "5"),
-  );
+  const fallbackDur = finalDuration ?? Number(videoGen.duration ?? "5");
+  const actualCostUsd =
+    (videoGen.endpoint ?? "multi-image2video") === "image2video"
+      ? image2VideoDeductionToUsd(
+          videoGen.modelName as KlingImage2VideoModel,
+          videoGen.mode as KlingImage2VideoMode,
+          result.finalUnitDeduction,
+          fallbackDur,
+        )
+      : multiImage2VideoDeductionToUsd(
+          videoGen.modelName as KlingMultiImage2VideoModel,
+          videoGen.mode as KlingMultiImage2VideoMode,
+          result.finalUnitDeduction,
+          fallbackDur,
+        );
 
   const outputAsset = await MediaAsset.create({
     ownerId: videoGen.ownerId,

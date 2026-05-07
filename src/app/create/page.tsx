@@ -5,6 +5,7 @@ import { CreateGenerationForm } from "@/components/CreateGenerationForm";
 import { CreateImageGenerationForm } from "@/components/CreateImageGenerationForm";
 import { CreateCarouselForm } from "@/components/CreateCarouselForm";
 import { CreateVideoFromImagesForm } from "@/components/CreateVideoFromImagesForm";
+import { CreateImage2VideoForm } from "@/components/CreateImage2VideoForm";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 
 export default function CreatePage() {
@@ -27,6 +28,7 @@ export default function CreatePage() {
           <TabsTrigger value="image">Image (image-to-image)</TabsTrigger>
           <TabsTrigger value="carousel">Carousel</TabsTrigger>
           <TabsTrigger value="image-to-video">Image to video</TabsTrigger>
+          <TabsTrigger value="multi-image-to-video">Multi-image to video</TabsTrigger>
         </TabsList>
         <TabsContent value="video">
           <p className="mb-4 max-w-prose text-sm text-[var(--color-fg-muted)]">
@@ -50,8 +52,17 @@ export default function CreatePage() {
         </TabsContent>
         <TabsContent value="image-to-video">
           <p className="mb-4 max-w-prose text-sm text-[var(--color-fg-muted)]">
+            Generate a video from a single start image (and an optional end-frame image)
+            plus a prompt. Pick from V1, V1.5, V1.6, V2.1, V2.5 Turbo, V2.6 in standard
+            or professional mode.
+          </p>
+          <CreateImage2VideoForm />
+        </TabsContent>
+        <TabsContent value="multi-image-to-video">
+          <p className="mb-4 max-w-prose text-sm text-[var(--color-fg-muted)]">
             Generate a video from up to 4 reference images plus a prompt. Each image
             is treated as an element/subject the model should weave into the scene.
+            Kling restricts this endpoint to V1.6 only.
           </p>
           <CreateVideoFromImagesForm />
         </TabsContent>

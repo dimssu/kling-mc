@@ -4,6 +4,7 @@ import { KlingApiError, shouldRefreshToken } from "./errors";
 import { getKlingToken, invalidateKlingToken } from "./jwt";
 import type {
   CreateTaskResult,
+  Image2VideoInput,
   ImageTaskQueryResult,
   ImageToImageInput,
   KlingProvider,
@@ -234,21 +235,45 @@ class OfficialKlingProvider implements KlingProvider {
       "GET",
       `/v1/videos/multi-image2video/${encodeURIComponent(taskId)}`,
     );
-    const firstVideo = data.task_result?.videos?.[0];
+    return mapVideoQuery(data);
+  }
+
+  async createImage2VideoTask(
+    input: Image2VideoInput,
+  ): Promise<CreateTaskResult> {
+    const body: Record<string, unknown> = {
+      model_name: input.modelName,
+      image: input.imageUrl,
+      mode: input.mode,
+      duration: input.duration,
+      aspect_ratio: input.aspectRatio,
+      external_task_id: input.externalTaskId,
+    };
+    if (input.tailImageUrl) body.image_tail = input.tailImageUrl;
+    if (input.prompt) body.prompt = input.prompt;
+    if (input.negativePrompt) body.negative_prompt = input.negativePrompt;
+    if (input.cfgScale != null) body.cfg_scale = input.cfgScale;
+    if (input.watermarkEnabled) body.watermark_info = { enabled: true };
+    if (input.callbackUrl) body.callback_url = input.callbackUrl;
+
+    const data = await this.request<CreateData>(
+      "POST",
+      "/v1/videos/image2video",
+      body,
+    );
     return {
       providerTaskId: data.task_id,
-      externalTaskId: data.task_info?.external_task_id ?? null,
       status: data.task_status,
-      statusMessage: data.task_status_msg ?? null,
-      videoUrl: firstVideo?.url ?? null,
-      watermarkVideoUrl: firstVideo?.watermark_url ?? null,
-      videoDurationSec:
-        firstVideo?.duration != null && Number.isFinite(Number(firstVideo.duration))
-          ? Number(firstVideo.duration)
-          : null,
-      finalUnitDeduction: data.final_unit_deduction ?? null,
       rawPayload: data,
     };
+  }
+
+  async getImage2VideoTask(taskId: string): Promise<TaskQueryResult> {
+    const data = await this.request<QueryData>(
+      "GET",
+      `/v1/videos/image2video/${encodeURIComponent(taskId)}`,
+    );
+    return mapVideoQuery(data);
   }
 
   private async request<T>(
@@ -303,6 +328,24 @@ class OfficialKlingProvider implements KlingProvider {
 
     return envelope.data;
   }
+}
+
+function mapVideoQuery(data: QueryData): TaskQueryResult {
+  const firstVideo = data.task_result?.videos?.[0];
+  return {
+    providerTaskId: data.task_id,
+    externalTaskId: data.task_info?.external_task_id ?? null,
+    status: data.task_status,
+    statusMessage: data.task_status_msg ?? null,
+    videoUrl: firstVideo?.url ?? null,
+    watermarkVideoUrl: firstVideo?.watermark_url ?? null,
+    videoDurationSec:
+      firstVideo?.duration != null && Number.isFinite(Number(firstVideo.duration))
+        ? Number(firstVideo.duration)
+        : null,
+    finalUnitDeduction: data.final_unit_deduction ?? null,
+    rawPayload: data,
+  };
 }
 
 function mapImageQuery(data: ImageQueryData): ImageTaskQueryResult {

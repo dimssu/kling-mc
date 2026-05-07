@@ -122,7 +122,10 @@ export type VideoGeneration = {
   provider: string;
   providerTaskId: string | null;
   externalTaskId: string;
+  endpoint: "multi-image2video" | "image2video";
   referenceImageIds: string[];
+  tailImageId: string | null;
+  cfgScale: number | null;
   outputAssetId: string | null;
   prompt: string | null;
   negativePrompt: string | null;
@@ -142,6 +145,7 @@ export type VideoGeneration = {
   submittedAt: string | null;
   completedAt: string | null;
   referenceImages?: Array<MediaAsset | null>;
+  tailImage?: MediaAsset | null;
   outputAsset?: MediaAsset | null;
 } & CaptionPackFields;
 
@@ -282,17 +286,41 @@ export const api = {
       `/api/image-generations/${id}/favorite`,
       { method: "POST", body: JSON.stringify({ value }) },
     ),
-  createVideoGeneration: (input: {
-    imageIds: string[];
-    prompt: string;
-    negativePrompt?: string;
-    modelName?: "kling-v1-6";
-    mode?: "std" | "pro";
-    duration?: "5" | "10";
-    aspectRatio?: "16:9" | "9:16" | "1:1";
-    watermarkEnabled?: boolean;
-    captionPackEnabled?: boolean;
-  }) =>
+  createVideoGeneration: (
+    input:
+      | {
+          endpoint: "multi-image2video";
+          imageIds: string[];
+          prompt: string;
+          negativePrompt?: string;
+          modelName?: "kling-v1-6";
+          mode?: "std" | "pro";
+          duration?: "5" | "10";
+          aspectRatio?: "16:9" | "9:16" | "1:1";
+          watermarkEnabled?: boolean;
+          captionPackEnabled?: boolean;
+        }
+      | {
+          endpoint: "image2video";
+          imageId: string;
+          tailImageId?: string;
+          prompt?: string;
+          negativePrompt?: string;
+          modelName:
+            | "kling-v1"
+            | "kling-v1-5"
+            | "kling-v1-6"
+            | "kling-v2-1"
+            | "kling-v2-5-turbo"
+            | "kling-v2-6";
+          mode?: "std" | "pro";
+          duration?: "5" | "10";
+          aspectRatio?: "16:9" | "9:16" | "1:1";
+          cfgScale?: number;
+          watermarkEnabled?: boolean;
+          captionPackEnabled?: boolean;
+        },
+  ) =>
     request<{ videoGeneration: VideoGeneration }>("/api/video-generations", {
       method: "POST",
       body: JSON.stringify(input),

@@ -94,6 +94,39 @@ export type ImageTaskQueryResult = {
   rawPayload: unknown;
 };
 
+// /v1/videos/image2video — generate a video from a single image (with optional
+// end frame). The endpoint accepts a wider model menu than multi-image2video.
+// We expose the std/pro tier here; Master models and v3.0 (per-second pricing)
+// are deferred until they earn a separate flow.
+export type KlingImage2VideoModel =
+  | "kling-v1"
+  | "kling-v1-5"
+  | "kling-v1-6"
+  | "kling-v2-1"
+  | "kling-v2-5-turbo"
+  | "kling-v2-6";
+
+export type KlingImage2VideoMode = "std" | "pro";
+export type KlingImage2VideoDuration = "5" | "10";
+
+export type Image2VideoInput = {
+  modelName: KlingImage2VideoModel;
+  mode: KlingImage2VideoMode;
+  duration: KlingImage2VideoDuration;
+  aspectRatio: KlingVideoAspectRatio;
+  imageUrl: string;
+  /** Optional end-frame image. If supplied, the generated video transitions
+   *  from `imageUrl` (start frame) to `tailImageUrl` (end frame). */
+  tailImageUrl?: string;
+  prompt?: string;
+  negativePrompt?: string;
+  /** Optional 0..1 — controls how strictly the prompt is followed. */
+  cfgScale?: number;
+  watermarkEnabled?: boolean;
+  callbackUrl?: string;
+  externalTaskId: string;
+};
+
 // /v1/videos/multi-image2video — generate a video from up to 4 reference images.
 export type KlingMultiImage2VideoModel = "kling-v1-6";
 export type KlingMultiImage2VideoMode = "std" | "pro";
@@ -123,4 +156,6 @@ export interface KlingProvider {
   getSingleImage2ImageTask(taskId: string): Promise<ImageTaskQueryResult>;
   createMultiImage2VideoTask(input: MultiImage2VideoInput): Promise<CreateTaskResult>;
   getMultiImage2VideoTask(taskId: string): Promise<TaskQueryResult>;
+  createImage2VideoTask(input: Image2VideoInput): Promise<CreateTaskResult>;
+  getImage2VideoTask(taskId: string): Promise<TaskQueryResult>;
 }

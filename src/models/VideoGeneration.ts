@@ -17,7 +17,12 @@ const VideoGenerationSchema = new Schema(
     },
     externalTaskId: { type: String, required: true, index: { unique: true } },
 
+    // "multi-image2video" (v1.6 only) | "image2video" (single subject + optional tail)
+    endpoint: { type: String, default: "multi-image2video" },
+
     referenceImageIds: { type: [String], default: [] },
+    tailImageId: { type: String, default: null },
+    cfgScale: { type: Number, default: null },
     outputAssetId: {
       type: String,
       default: null,

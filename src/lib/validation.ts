@@ -198,7 +198,9 @@ export const createCarouselSchema = z
 
 export type CreateCarouselInput = z.infer<typeof createCarouselSchema>;
 
-export const createVideoGenerationSchema = z.object({
+// Multi-image2video: 1–4 reference images, kling-v1-6 only.
+const createMultiImage2VideoSchema = z.object({
+  endpoint: z.literal("multi-image2video"),
   imageIds: z.array(z.string().min(1)).min(1).max(4),
   prompt: z.string().min(1).max(2500),
   negativePrompt: z.string().max(2500).optional(),
@@ -209,5 +211,33 @@ export const createVideoGenerationSchema = z.object({
   watermarkEnabled: z.boolean().default(false),
   captionPackEnabled: z.boolean().default(false),
 });
+
+// Image2video: single subject image + optional end-frame, broad model menu.
+const createImage2VideoSchema = z.object({
+  endpoint: z.literal("image2video"),
+  imageId: z.string().min(1),
+  tailImageId: z.string().min(1).optional(),
+  prompt: z.string().max(2500).optional(),
+  negativePrompt: z.string().max(2500).optional(),
+  modelName: z.enum([
+    "kling-v1",
+    "kling-v1-5",
+    "kling-v1-6",
+    "kling-v2-1",
+    "kling-v2-5-turbo",
+    "kling-v2-6",
+  ]),
+  mode: z.enum(["std", "pro"]).default("std"),
+  duration: z.enum(["5", "10"]).default("5"),
+  aspectRatio: z.enum(["16:9", "9:16", "1:1"]).default("16:9"),
+  cfgScale: z.number().min(0).max(1).optional(),
+  watermarkEnabled: z.boolean().default(false),
+  captionPackEnabled: z.boolean().default(false),
+});
+
+export const createVideoGenerationSchema = z.discriminatedUnion("endpoint", [
+  createMultiImage2VideoSchema,
+  createImage2VideoSchema,
+]);
 
 export type CreateVideoGenerationInput = z.infer<typeof createVideoGenerationSchema>;
