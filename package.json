@@ -21,7 +21,8 @@
     "app:restart": "bash scripts/stop.sh && bash scripts/start.sh",
     "app:logs": "tail -f .run/logs/*.log",
     "migrate:legacy": "dotenv -e .env.local -- tsx scripts/migrate-pg-minio-to-mongo-s3.ts",
-    "sync:gallery": "dotenv -e .env.local -- tsx scripts/sync-to-gallery.ts"
+    "sync:gallery": "dotenv -e .env.local -- tsx scripts/sync-to-gallery.ts",
+    "backfill:hashes": "dotenv -e .env.local -- tsx scripts/backfill-content-hashes.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1042.0",
