@@ -15,6 +15,10 @@ const MediaAssetSchema = new Schema(
     height: { type: Number, default: null },
     storageKey: { type: String, required: true },
     thumbnailKey: { type: String, default: null },
+    // SHA-256 of the original bytes (lowercase hex). Used for byte-exact
+    // duplicate detection on upload. Nullable so existing rows pre-feature
+    // don't fail validation; future uploads always set it.
+    contentHash: { type: String, default: null },
     isFavorite: { type: Boolean, default: false },
     createdAt: { type: Date, default: () => new Date() },
   },
@@ -23,6 +27,12 @@ const MediaAssetSchema = new Schema(
 
 MediaAssetSchema.index({ ownerId: 1, kind: 1, createdAt: -1 });
 MediaAssetSchema.index({ ownerId: 1, isFavorite: 1 });
+// Lookup index for the dup-detection path. Sparse so legacy null rows are
+// excluded — no extra space cost for pre-feature data.
+MediaAssetSchema.index(
+  { ownerId: 1, kind: 1, contentHash: 1 },
+  { sparse: true, name: "owner_kind_hash" },
+);
 
 export type MediaAssetDoc = InferSchemaType<typeof MediaAssetSchema> & { _id: string };
 

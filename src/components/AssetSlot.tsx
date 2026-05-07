@@ -4,10 +4,23 @@ import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Upload, X } from "lucide-react";
 import { toast } from "sonner";
-import { api, type MediaAsset } from "@/lib/api-client";
-import { formatBytes, formatDuration } from "@/lib/utils";
+import {
+  api,
+  DuplicateUploadError,
+  type MediaAsset,
+} from "@/lib/api-client";
+import { formatBytes, formatDuration, relativeTime } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { MediaThumb } from "@/components/MediaThumb";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 export type AssetKind = "source_video" | "reference_image";
 
@@ -23,19 +36,35 @@ export function AssetSlot({ kind, accept, asset, onPick, emptyHint }: AssetSlotP
   const inputRef = React.useRef<HTMLInputElement>(null);
   const qc = useQueryClient();
 
+  // When the server returns 409 we stash the in-flight file + the existing
+  // match so the dialog can offer "use existing" / "upload anyway".
+  const [dupe, setDupe] = React.useState<{
+    file: File;
+    existing: MediaAsset;
+  } | null>(null);
+
   const { data: existing } = useQuery({
     queryKey: ["assets", kind],
     queryFn: () => api.listAssets({ kind }),
   });
 
   const upload = useMutation({
-    mutationFn: (file: File) => api.uploadAsset(file, kind),
+    mutationFn: ({ file, force }: { file: File; force?: boolean }) =>
+      api.uploadAsset(file, kind, { force }),
     onSuccess: ({ asset: a }) => {
       qc.invalidateQueries({ queryKey: ["assets", kind] });
       onPick(a);
       toast.success("Uploaded");
+      setDupe(null);
     },
-    onError: (err: Error) => toast.error(err.message),
+    onError: (err: Error, vars) => {
+      if (err instanceof DuplicateUploadError) {
+        // Don't toast — show the confirm dialog instead.
+        setDupe({ file: vars.file, existing: err.existingAsset });
+        return;
+      }
+      toast.error(err.message);
+    },
   });
 
   const defaultHint =
@@ -90,7 +119,7 @@ export function AssetSlot({ kind, accept, asset, onPick, emptyHint }: AssetSlotP
         className="hidden"
         onChange={(e) => {
           const f = e.target.files?.[0];
-          if (f) upload.mutate(f);
+          if (f) upload.mutate({ file: f });
           e.target.value = "";
         }}
       />
@@ -115,6 +144,84 @@ export function AssetSlot({ kind, accept, asset, onPick, emptyHint }: AssetSlotP
           </div>
         </details>
       )}
+
+      <Dialog
+        open={!!dupe}
+        onOpenChange={(open) => {
+          if (!open) setDupe(null);
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Looks like a duplicate</DialogTitle>
+            <DialogDescription>
+              The bytes of this file match an image already in your library.
+              Upload it again, or just reuse the existing one.
+            </DialogDescription>
+          </DialogHeader>
+
+          {dupe && (
+            <div className="space-y-3">
+              <MediaThumb asset={dupe.existing} />
+              <div className="text-xs text-[var(--color-fg-muted)] flex flex-wrap gap-x-4 gap-y-1">
+                <span className="text-[var(--color-fg)] font-medium">
+                  {dupe.existing.filename}
+                </span>
+                <span>{formatBytes(dupe.existing.sizeBytes)}</span>
+                {dupe.existing.width && dupe.existing.height && (
+                  <span>
+                    {dupe.existing.width}×{dupe.existing.height}
+                  </span>
+                )}
+                <span>{relativeTime(dupe.existing.createdAt)}</span>
+              </div>
+              <div className="text-xs text-[var(--color-fg-subtle)]">
+                Trying to upload:{" "}
+                <span className="text-[var(--color-fg-muted)]">
+                  {dupe.file.name} ({formatBytes(dupe.file.size)})
+                </span>
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="!flex-col gap-2 sm:!flex-row sm:justify-end">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setDupe(null)}
+              disabled={upload.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={!dupe || upload.isPending}
+              onClick={() => {
+                if (!dupe) return;
+                onPick(dupe.existing);
+                setDupe(null);
+                toast.success("Using existing image");
+              }}
+            >
+              Use existing
+            </Button>
+            <Button
+              type="button"
+              disabled={!dupe || upload.isPending}
+              onClick={() => {
+                if (!dupe) return;
+                upload.mutate({ file: dupe.file, force: true });
+              }}
+            >
+              {upload.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : null}
+              Upload anyway
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

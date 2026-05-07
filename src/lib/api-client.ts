@@ -20,6 +20,20 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return json as T;
 }
 
+/** Thrown by api.uploadAsset when the server detects a byte-identical
+ *  reference image already exists for this owner. The caller can either
+ *  surface a confirm dialog and retry with `{ force: true }`, or just call
+ *  onPick(existingAsset) to reuse the existing one. */
+export class DuplicateUploadError extends Error {
+  constructor(
+    public readonly existingAsset: MediaAsset,
+    public readonly contentHash: string,
+  ) {
+    super("Duplicate upload detected");
+    this.name = "DuplicateUploadError";
+  }
+}
+
 export type MediaAsset = {
   id: string;
   ownerId: string;
@@ -180,11 +194,42 @@ export type UsageSummary = {
 };
 
 export const api = {
-  uploadAsset: async (file: File, kind: "source_video" | "reference_image") => {
+  uploadAsset: async (
+    file: File,
+    kind: "source_video" | "reference_image",
+    opts?: { force?: boolean },
+  ): Promise<{ asset: MediaAsset }> => {
     const fd = new FormData();
     fd.append("file", file);
     fd.append("kind", kind);
-    return request<{ asset: MediaAsset }>("/api/uploads", { method: "POST", body: fd });
+    if (opts?.force) fd.append("force", "true");
+
+    const res = await fetch("/api/uploads", { method: "POST", body: fd });
+    const text = await res.text();
+    let json: unknown = null;
+    try {
+      json = text ? JSON.parse(text) : null;
+    } catch {
+      json = { error: text };
+    }
+
+    // Server signals a byte-exact duplicate with HTTP 409 + a structured body.
+    if (
+      res.status === 409 &&
+      json &&
+      typeof json === "object" &&
+      (json as { duplicate?: boolean }).duplicate === true
+    ) {
+      const j = json as { duplicate: true; contentHash: string; existingAsset: MediaAsset };
+      throw new DuplicateUploadError(j.existingAsset, j.contentHash);
+    }
+
+    if (!res.ok) {
+      const msg = (json as { error?: string })?.error ?? res.statusText;
+      throw new Error(msg);
+    }
+
+    return json as { asset: MediaAsset };
   },
   listAssets: (params: { kind?: string; favorite?: boolean } = {}) => {
     const sp = new URLSearchParams();

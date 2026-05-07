@@ -1,12 +1,14 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { open, stat, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pipeline } from "node:stream/promises";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { connectMongo } from "@/lib/mongo";
 import { MediaAsset } from "@/models";
+import type { MediaAssetDoc } from "@/models";
 import { getEnv } from "@/lib/env";
 import { logger } from "@/lib/logger";
 import { makeUploadKey, uploadObjectStream } from "@/lib/storage";
@@ -140,8 +142,38 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: validation.reason }, { status: 400 });
     }
 
-    const ext = extForMime(sniffed);
+    // Byte-exact duplicate detection. Hash on the way to S3 — for a 10 MB
+    // image this is ~30 ms, dwarfed by the upload itself. Only checked for
+    // reference_image; videos are huge and re-uploads are rare.
     const env = getEnv();
+    const contentHash = await fileSha256(tmpPath);
+    let existingDuplicate: MediaAssetDoc | null = null;
+    if (kind === "reference_image") {
+      existingDuplicate = await MediaAsset.findOne({
+        ownerId: env.DEFAULT_USER_ID,
+        kind: "reference_image",
+        contentHash,
+      }).lean();
+    }
+
+    const force =
+      String(parsed.fields.force ?? "").toLowerCase() === "true" ||
+      parsed.fields.force === "1";
+
+    if (existingDuplicate && !force) {
+      return NextResponse.json(
+        {
+          duplicate: true,
+          contentHash,
+          existingAsset: toApi(existingDuplicate),
+          message:
+            "An identical image is already in your library. Confirm to upload anyway.",
+        },
+        { status: 409 },
+      );
+    }
+
+    const ext = extForMime(sniffed);
     const storageKey = makeUploadKey(env.DEFAULT_USER_ID, kind, ext);
 
     await uploadObjectStream({
@@ -161,6 +193,7 @@ export async function POST(req: Request) {
       width: probe?.width ?? null,
       height: probe?.height ?? null,
       storageKey,
+      contentHash,
     });
 
     return NextResponse.json({ asset: toApi(asset.toObject()) });
@@ -215,6 +248,12 @@ async function probeMediaPath(path: string) {
 
 function sanitizeFilename(name: string): string {
   return name.replace(/[^\w.\- ]/g, "_").slice(0, 200);
+}
+
+async function fileSha256(path: string): Promise<string> {
+  const hash = createHash("sha256");
+  await pipeline(createReadStream(path), hash);
+  return hash.digest("hex");
 }
 
 function errMsg(e: unknown): string {
