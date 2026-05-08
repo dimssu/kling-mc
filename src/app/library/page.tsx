@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { GenerationCard } from "@/components/GenerationCard";
+import { VideoGenerationCard } from "@/components/VideoGenerationCard";
 import { ImageGenerationCard } from "@/components/ImageGenerationCard";
 import { MediaThumb } from "@/components/MediaThumb";
 
@@ -98,13 +99,19 @@ function ImageGenerationsTab({ favOnly }: { favOnly: boolean }) {
 }
 
 function GenerationsTab({ favOnly }: { favOnly: boolean }) {
-  const q = useQuery({
+  const motion = useQuery({
     queryKey: ["generations", { favorite: favOnly }],
     queryFn: () => api.listGenerations({ favorite: favOnly }),
     refetchInterval: 8_000,
   });
+  const fromImages = useQuery({
+    queryKey: ["video-generations", { favorite: favOnly }],
+    queryFn: () => api.listVideoGenerations({ favorite: favOnly }),
+    refetchInterval: 8_000,
+  });
 
-  if (q.isLoading) {
+  const isLoading = motion.isLoading || fromImages.isLoading;
+  if (isLoading) {
     return (
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {Array.from({ length: 6 }).map((_, i) => (
@@ -114,7 +121,26 @@ function GenerationsTab({ favOnly }: { favOnly: boolean }) {
     );
   }
 
-  if (!q.data?.items.length) {
+  // Merge the two lists by createdAt, newest first. We tag each row with a
+  // `_kind` so the renderer picks the right card without re-fetching.
+  type Row =
+    | { _kind: "motion"; createdAt: string; data: NonNullable<typeof motion.data>["items"][number] }
+    | { _kind: "from-images"; createdAt: string; data: NonNullable<typeof fromImages.data>["items"][number] };
+
+  const rows: Row[] = [
+    ...(motion.data?.items ?? []).map((g) => ({
+      _kind: "motion" as const,
+      createdAt: g.createdAt,
+      data: g,
+    })),
+    ...(fromImages.data?.items ?? []).map((g) => ({
+      _kind: "from-images" as const,
+      createdAt: g.createdAt,
+      data: g,
+    })),
+  ].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+
+  if (!rows.length) {
     return (
       <Card>
         <CardContent className="flex flex-col items-center justify-center gap-3 py-16 text-center">
@@ -131,9 +157,13 @@ function GenerationsTab({ favOnly }: { favOnly: boolean }) {
 
   return (
     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-      {q.data.items.map((g) => (
-        <GenerationCard key={g.id} gen={g} />
-      ))}
+      {rows.map((r) =>
+        r._kind === "motion" ? (
+          <GenerationCard key={`m-${r.data.id}`} gen={r.data} />
+        ) : (
+          <VideoGenerationCard key={`v-${r.data.id}`} gen={r.data} />
+        ),
+      )}
     </div>
   );
 }
