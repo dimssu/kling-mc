@@ -204,6 +204,83 @@ export async function suggestImagePrompt(opts?: {
   };
 }
 
+export type SuggestedVideoPrompt = {
+  prompt: string;
+  negativePrompt: string;
+  vibe: string;
+};
+
+const VIDEO_PROMPT_SCHEMA = {
+  type: Type.OBJECT,
+  required: ["prompt", "negativePrompt", "vibe"],
+  properties: {
+    prompt: { type: Type.STRING },
+    negativePrompt: { type: Type.STRING },
+    vibe: { type: Type.STRING },
+  },
+};
+
+const VIDEO_PROMPT_RULES = [
+  "The user is generating a SINGLE-image-to-video clip with Kling. Only ONE start image is supplied — no end frame. The model needs guidance on what subtle motion should happen between frames.",
+  "Write ONE detailed video-generation prompt (60–130 words) describing the motion of the subject and her environment. The subject in the reference image is the only character.",
+  "Keep motion GENTLE and natural: small body shifts, hair drifting in the breeze, slow shoulder turn, soft eye blink, a half-step toward camera, subtle smile, hand brushing hair. NEVER ask for fast movement, dramatic action, walking long distances, large pose changes, or scene cuts — those break single-image-to-video.",
+  "Always have her ENGAGE WITH HER ENVIRONMENT in some plausible way: looking around, glancing toward something off-camera, small interaction with whatever the scene contains (touching a railing, sipping, leaning slightly into the scene). Match the environment in the reference image.",
+  "Be visual and specific: describe the motion (what moves, how slowly), the light (golden hour, soft window light, neon glow, etc.) — and add a one-line cinematic camera hint (e.g. 'subtle dolly-in, 50mm, shallow depth of field, smooth motion').",
+  "Maintain perfect identity, body, hair, wardrobe, and tanned skin tone consistent with the reference image. Specify '100% identical face and identity' as part of the instruction.",
+  "Do NOT invent ages, names, or product names. Do NOT include hashtags or social copy.",
+  "Also produce a tight negativePrompt (12–25 short phrases, comma-separated) that suppresses common video-gen failure modes: jitter, stutter, jerky motion, morphing face, identity drift, deformed hands, extra fingers, fast cuts, scene change, walking out of frame, blurry, low quality, plastic skin, melted features, multiple people, watermark, text, logo, oversaturated.",
+];
+
+/**
+ * Returns a fresh single-image-to-video prompt aligned with Siya's profile.
+ * Designed for the case where the user uploads ONE start image (no end frame)
+ * and wants a gentle, environment-aware short clip.
+ */
+export async function suggestVideoPrompt(): Promise<SuggestedVideoPrompt> {
+  const env = getEnv();
+  const client = getClient();
+  const briefing = siyaBriefing();
+
+  const prompt = [
+    briefing,
+    "",
+    "Task: produce a single Kling image-to-video prompt for one uploaded start image (no end frame). The clip should feel like a short Instagram story moment of her gently moving and engaging with her environment.",
+    "",
+    "Rules:",
+    ...VIDEO_PROMPT_RULES.map((r) => `- ${r}`),
+    "",
+    "Return strict JSON: { prompt: string, negativePrompt: string, vibe: string }. The 'vibe' field is 3-6 words describing the clip's mood (e.g. 'soft golden-hour stillness').",
+  ].join("\n");
+
+  const res = await client.models.generateContent({
+    model: env.GEMINI_MODEL,
+    contents: prompt,
+    config: {
+      temperature: 1.0,
+      topP: 0.95,
+      responseMimeType: "application/json",
+      responseSchema: VIDEO_PROMPT_SCHEMA,
+    },
+  });
+
+  const text = res.text ?? "";
+  let parsed: { prompt?: string; negativePrompt?: string; vibe?: string };
+  try {
+    parsed = JSON.parse(text) as { prompt?: string; negativePrompt?: string; vibe?: string };
+  } catch (err) {
+    logger.warn(
+      { err: err instanceof Error ? err.message : err, text },
+      "Gemini video-prompt JSON parse failed",
+    );
+    throw new Error("Couldn't parse the suggestion. Try again.");
+  }
+  return {
+    prompt: String(parsed.prompt ?? "").trim(),
+    negativePrompt: String(parsed.negativePrompt ?? "").trim(),
+    vibe: String(parsed.vibe ?? "").trim(),
+  };
+}
+
 export type CarouselSlidePrompt = {
   prompt: string;
   negativePrompt: string;

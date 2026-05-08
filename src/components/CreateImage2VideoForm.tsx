@@ -3,7 +3,7 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, Loader2 } from "lucide-react";
+import { ArrowRight, Loader2, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { api, type MediaAsset } from "@/lib/api-client";
 import { formatUsd } from "@/lib/utils";
@@ -80,6 +80,17 @@ export function CreateImage2VideoForm() {
   const [duration, setDuration] = React.useState<Duration>("5");
   const [aspectRatio, setAspectRatio] = React.useState<AspectRatio>("16:9");
   const [cfgScale, setCfgScale] = React.useState<number | null>(null);
+  const [vibe, setVibe] = React.useState<string | null>(null);
+
+  const suggest = useMutation({
+    mutationFn: () => api.suggestVideoPrompt(),
+    onSuccess: (s) => {
+      setPrompt(s.prompt);
+      setNegativePrompt(s.negativePrompt);
+      setVibe(s.vibe || null);
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
 
   const submit = useMutation({
     mutationFn: () => {
@@ -160,16 +171,39 @@ export function CreateImage2VideoForm() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-1.5">
-              <Label htmlFor="prompt">Prompt</Label>
+              <div className="flex items-center justify-between gap-2">
+                <Label htmlFor="prompt">Prompt</Label>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => suggest.mutate()}
+                  disabled={suggest.isPending}
+                  title="AI-fill positive + negative prompts for a gentle single-image-to-video clip"
+                >
+                  {suggest.isPending ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="h-3.5 w-3.5" />
+                  )}
+                  Suggest
+                </Button>
+              </div>
               <Textarea
                 id="prompt"
                 value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                placeholder="e.g. Slow cinematic dolly-in on the subject, soft golden-hour light, gentle hair movement"
+                onChange={(e) => {
+                  setPrompt(e.target.value);
+                  setVibe(null);
+                }}
+                placeholder="Click Suggest for an AI-written gentle motion prompt, or type your own."
                 maxLength={2500}
                 rows={4}
               />
-              <p className="text-xs text-[var(--color-fg-subtle)]">{prompt.length}/2500</p>
+              <div className="flex items-center justify-between gap-2 text-xs text-[var(--color-fg-subtle)]">
+                <span>{prompt.length}/2500</span>
+                {vibe && <span className="italic">vibe: {vibe}</span>}
+              </div>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="neg-prompt">Negative prompt (optional)</Label>
