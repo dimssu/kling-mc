@@ -19,6 +19,11 @@ const MediaAssetSchema = new Schema(
     // duplicate detection on upload. Nullable so existing rows pre-feature
     // don't fail validation; future uploads always set it.
     contentHash: { type: String, default: null },
+    // 64-bit dHash (16 hex chars) for "looks the same" detection — catches
+    // re-encodings, format swaps, EXIF-stripped copies, light edits. See
+    // src/lib/perceptual-hash.ts. Nullable for the same backfill reason as
+    // contentHash. Only populated on reference_image rows.
+    perceptualHash: { type: String, default: null },
     isFavorite: { type: Boolean, default: false },
     createdAt: { type: Date, default: () => new Date() },
   },

@@ -20,14 +20,24 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return json as T;
 }
 
-/** Thrown by api.uploadAsset when the server detects a byte-identical
- *  reference image already exists for this owner. The caller can either
- *  surface a confirm dialog and retry with `{ force: true }`, or just call
- *  onPick(existingAsset) to reuse the existing one. */
+/** Thrown by api.uploadAsset when the server detects a duplicate reference
+ *  image. The caller can surface a confirm dialog and retry with
+ *  `{ force: true }`, or just call onPick(existingAsset) to reuse it.
+ *
+ *  `kind` distinguishes the two detection tiers so the UI can phrase the
+ *  prompt accurately:
+ *    - "exact"      — byte-identical SHA-256 match (re-upload of the same file)
+ *    - "perceptual" — pixels look the same but bytes differ (re-encode,
+ *                     EXIF strip, format swap, light edit). `distance` is the
+ *                     dHash Hamming distance out of 64; lower is more similar. */
+export type DuplicateKind = "exact" | "perceptual";
+
 export class DuplicateUploadError extends Error {
   constructor(
     public readonly existingAsset: MediaAsset,
     public readonly contentHash: string,
+    public readonly kind: DuplicateKind = "exact",
+    public readonly distance: number | null = null,
   ) {
     super("Duplicate upload detected");
     this.name = "DuplicateUploadError";
@@ -213,15 +223,27 @@ export const api = {
       json = { error: text };
     }
 
-    // Server signals a byte-exact duplicate with HTTP 409 + a structured body.
+    // Server signals a duplicate (exact or perceptual) with HTTP 409 + a
+    // structured body.
     if (
       res.status === 409 &&
       json &&
       typeof json === "object" &&
       (json as { duplicate?: boolean }).duplicate === true
     ) {
-      const j = json as { duplicate: true; contentHash: string; existingAsset: MediaAsset };
-      throw new DuplicateUploadError(j.existingAsset, j.contentHash);
+      const j = json as {
+        duplicate: true;
+        duplicateKind?: DuplicateKind;
+        contentHash: string;
+        existingAsset: MediaAsset;
+        distance?: number;
+      };
+      throw new DuplicateUploadError(
+        j.existingAsset,
+        j.contentHash,
+        j.duplicateKind ?? "exact",
+        typeof j.distance === "number" ? j.distance : null,
+      );
     }
 
     if (!res.ok) {

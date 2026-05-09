@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import {
   api,
   DuplicateUploadError,
+  type DuplicateKind,
   type MediaAsset,
 } from "@/lib/api-client";
 import { formatBytes, formatDuration, relativeTime } from "@/lib/utils";
@@ -37,10 +38,13 @@ export function AssetSlot({ kind, accept, asset, onPick, emptyHint }: AssetSlotP
   const qc = useQueryClient();
 
   // When the server returns 409 we stash the in-flight file + the existing
-  // match so the dialog can offer "use existing" / "upload anyway".
+  // match so the dialog can offer "use existing" / "upload anyway". `kind`
+  // toggles the wording between byte-exact and perceptual near-match.
   const [dupe, setDupe] = React.useState<{
     file: File;
     existing: MediaAsset;
+    kind: DuplicateKind;
+    distance: number | null;
   } | null>(null);
 
   const { data: existing } = useQuery({
@@ -60,7 +64,12 @@ export function AssetSlot({ kind, accept, asset, onPick, emptyHint }: AssetSlotP
     onError: (err: Error, vars) => {
       if (err instanceof DuplicateUploadError) {
         // Don't toast — show the confirm dialog instead.
-        setDupe({ file: vars.file, existing: err.existingAsset });
+        setDupe({
+          file: vars.file,
+          existing: err.existingAsset,
+          kind: err.kind,
+          distance: err.distance,
+        });
         return;
       }
       toast.error(err.message);
@@ -153,10 +162,15 @@ export function AssetSlot({ kind, accept, asset, onPick, emptyHint }: AssetSlotP
       >
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>Looks like a duplicate</DialogTitle>
+            <DialogTitle>
+              {dupe?.kind === "perceptual"
+                ? "Looks like the same image"
+                : "Looks like a duplicate"}
+            </DialogTitle>
             <DialogDescription>
-              The bytes of this file match an image already in your library.
-              Upload it again, or just reuse the existing one.
+              {dupe?.kind === "perceptual"
+                ? "This image has the same content as one already in your library — just saved or re-encoded differently. Upload it anyway, or reuse the existing one."
+                : "The bytes of this file match an image already in your library. Upload it again, or just reuse the existing one."}
             </DialogDescription>
           </DialogHeader>
 

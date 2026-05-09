@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { open, stat, unlink } from "node:fs/promises";
+import { open, readFile, stat, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -23,6 +23,11 @@ import {
   SUPPORTED_VIDEO_TYPES,
 } from "@/lib/validation";
 import { toApi } from "@/lib/serialize";
+import {
+  PERCEPTUAL_DUPE_THRESHOLD,
+  findClosestPerceptualMatch,
+  perceptualHashFromBuffer,
+} from "@/lib/perceptual-hash";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -142,32 +147,99 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: validation.reason }, { status: 400 });
     }
 
-    // Byte-exact duplicate detection. Hash on the way to S3 — for a 10 MB
-    // image this is ~30 ms, dwarfed by the upload itself. Only checked for
-    // reference_image; videos are huge and re-uploads are rare.
+    // Two-tier duplicate detection on reference_image uploads:
+    //   1. SHA-256 byte-exact match — fast indexed lookup, catches re-uploads
+    //      of the same file.
+    //   2. dHash perceptual near-match — catches re-encoded / re-saved /
+    //      EXIF-stripped copies that have the same pixels but different bytes
+    //      (very common: ChatGPT downloads, "Save as" through Photos, etc.).
+    // Videos skip both: they're huge and rarely re-uploaded.
     const env = getEnv();
     const contentHash = await fileSha256(tmpPath);
-    let existingDuplicate: MediaAssetDoc | null = null;
+    let perceptualHash: string | null = null;
+    let exactDuplicate: MediaAssetDoc | null = null;
+    let perceptualDuplicate: { row: MediaAssetDoc; distance: number } | null = null;
+
     if (kind === "reference_image") {
-      existingDuplicate = await MediaAsset.findOne({
+      exactDuplicate = await MediaAsset.findOne({
         ownerId: env.DEFAULT_USER_ID,
         kind: "reference_image",
         contentHash,
       }).lean();
+
+      // Always compute the pHash so we can persist it on the new row even
+      // when it's not a duplicate. ~5 ms for a typical 2 MB image.
+      try {
+        const buf = await readFile(tmpPath);
+        perceptualHash = await perceptualHashFromBuffer(buf);
+      } catch (err) {
+        // Don't block the upload if sharp can't decode (very rare for files
+        // we already MIME-sniffed as JPEG/PNG, but defensive). The row just
+        // won't get a perceptual fingerprint — exact matching still works.
+        logger.warn({ err: errMsg(err) }, "Perceptual hash computation failed");
+      }
+
+      // Only run the perceptual sweep when SHA didn't already hit. The
+      // exact-match dialog is already the right thing to surface.
+      if (!exactDuplicate && perceptualHash) {
+        // Pull just { _id, perceptualHash } for every fingerprinted row in
+        // this owner's reference-image library, then Hamming-scan in memory.
+        // 64-bit hash + Brian Kernighan popcount — comfortably under 1 ms
+        // per 1000 rows.
+        const candidates = (await MediaAsset.find(
+          {
+            ownerId: env.DEFAULT_USER_ID,
+            kind: "reference_image",
+            perceptualHash: { $ne: null },
+          },
+          { _id: 1, perceptualHash: 1 },
+        ).lean()) as Array<{ _id: string; perceptualHash: string | null }>;
+
+        const closest = findClosestPerceptualMatch(
+          candidates,
+          perceptualHash,
+          PERCEPTUAL_DUPE_THRESHOLD,
+        );
+        if (closest) {
+          // Re-fetch the full doc so the dialog has filename / dimensions /
+          // createdAt to show.
+          const fullDoc = await MediaAsset.findById(closest.row._id).lean();
+          if (fullDoc) {
+            perceptualDuplicate = { row: fullDoc, distance: closest.distance };
+          }
+        }
+      }
     }
 
     const force =
       String(parsed.fields.force ?? "").toLowerCase() === "true" ||
       parsed.fields.force === "1";
 
-    if (existingDuplicate && !force) {
+    if (exactDuplicate && !force) {
       return NextResponse.json(
         {
           duplicate: true,
+          duplicateKind: "exact",
           contentHash,
-          existingAsset: toApi(existingDuplicate),
+          existingAsset: toApi(exactDuplicate),
           message:
             "An identical image is already in your library. Confirm to upload anyway.",
+        },
+        { status: 409 },
+      );
+    }
+
+    if (perceptualDuplicate && !force) {
+      return NextResponse.json(
+        {
+          duplicate: true,
+          duplicateKind: "perceptual",
+          contentHash,
+          perceptualHash,
+          distance: perceptualDuplicate.distance,
+          existingAsset: toApi(perceptualDuplicate.row),
+          message:
+            "This image looks the same as one already in your library. Confirm to upload anyway.",
         },
         { status: 409 },
       );
@@ -194,6 +266,7 @@ export async function POST(req: Request) {
       height: probe?.height ?? null,
       storageKey,
       contentHash,
+      perceptualHash,
     });
 
     return NextResponse.json({ asset: toApi(asset.toObject()) });
