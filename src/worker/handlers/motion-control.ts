@@ -16,6 +16,7 @@ import { probeMedia } from "@/lib/media-probe";
 import { getEnv } from "@/lib/env";
 import { signGid } from "@/lib/webhook-auth";
 import { generateCaptionPack, isLlmConfigured } from "@/lib/gemini";
+import { computeAssetHashes } from "@/lib/asset-hash";
 
 const POLL_PHASES: Array<{ untilSec: number; intervalMs: number }> = [
   { untilSec: 60, intervalMs: 5_000 },
@@ -227,6 +228,10 @@ async function finalizeSuccess(
     finalDuration ?? 5,
   );
 
+  // Hash on the way in so future uploads can be dedupe-checked against
+  // generated content too (videos: SHA only — sharp can't decode video).
+  const hashes = await computeAssetHashes(buffer, contentType);
+
   // Atomic conditional update: only the worker that flips status from
   // non-completed to completed wins. If we lose, delete the orphan asset.
   const outputAsset = await MediaAsset.create({
@@ -239,6 +244,8 @@ async function finalizeSuccess(
     width: probe.width,
     height: probe.height,
     storageKey,
+    contentHash: hashes.contentHash,
+    perceptualHash: hashes.perceptualHash,
   });
 
   const won = await Generation.updateOne(

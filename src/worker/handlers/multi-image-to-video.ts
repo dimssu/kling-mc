@@ -26,6 +26,7 @@ import {
 } from "@/lib/storage";
 import { probeMedia } from "@/lib/media-probe";
 import { generateCaptionPack, isLlmConfigured } from "@/lib/gemini";
+import { computeAssetHashes } from "@/lib/asset-hash";
 
 const POLL_PHASES: Array<{ untilSec: number; intervalMs: number }> = [
   { untilSec: 60, intervalMs: 5_000 },
@@ -275,6 +276,10 @@ async function finalizeSuccess(
           fallbackDur,
         );
 
+  // Hash on the way in so future uploads can be dedupe-checked against
+  // generated content too (videos: SHA only — sharp can't decode video).
+  const hashes = await computeAssetHashes(buffer, contentType);
+
   const outputAsset = await MediaAsset.create({
     ownerId: videoGen.ownerId,
     kind: "generated_video",
@@ -285,6 +290,8 @@ async function finalizeSuccess(
     width: probe.width,
     height: probe.height,
     storageKey,
+    contentHash: hashes.contentHash,
+    perceptualHash: hashes.perceptualHash,
   });
 
   const won = await VideoGeneration.updateOne(

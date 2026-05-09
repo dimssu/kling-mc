@@ -1,9 +1,8 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { open, readFile, stat, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pipeline } from "node:stream/promises";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { connectMongo } from "@/lib/mongo";
@@ -26,8 +25,8 @@ import { toApi } from "@/lib/serialize";
 import {
   PERCEPTUAL_DUPE_THRESHOLD,
   findClosestPerceptualMatch,
-  perceptualHashFromBuffer,
 } from "@/lib/perceptual-hash";
+import { computeAssetHashes } from "@/lib/asset-hash";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -147,66 +146,56 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: validation.reason }, { status: 400 });
     }
 
-    // Two-tier duplicate detection on reference_image uploads:
-    //   1. SHA-256 byte-exact match — fast indexed lookup, catches re-uploads
-    //      of the same file.
-    //   2. dHash perceptual near-match — catches re-encoded / re-saved /
-    //      EXIF-stripped copies that have the same pixels but different bytes
-    //      (very common: ChatGPT downloads, "Save as" through Photos, etc.).
-    // Videos skip both: they're huge and rarely re-uploaded.
+    // Two-tier duplicate detection. Runs for *every* upload regardless of
+    // kind, and looks across the whole owner's library — so the same image
+    // re-uploaded via any form (motion-control reference, image-gen subject,
+    // carousel subject, multi-image-to-video reference, …) gets flagged, and
+    // re-uploads of an image you previously generated also get flagged.
+    //
+    //   1. SHA-256 byte-exact match  — catches identical files
+    //   2. dHash perceptual near-match (images only) — catches re-encodes,
+    //      format swaps, EXIF strips, light edits
+    //
+    // Videos skip the perceptual tier (sharp can't decode them) but still
+    // get the SHA tier — re-uploads of the same MP4 are flagged.
     const env = getEnv();
-    const contentHash = await fileSha256(tmpPath);
-    let perceptualHash: string | null = null;
-    let exactDuplicate: MediaAssetDoc | null = null;
+    const buf = await readFile(tmpPath);
+    const { contentHash, perceptualHash } = await computeAssetHashes(buf, sniffed);
+
+    const exactDuplicate: MediaAssetDoc | null = await MediaAsset.findOne({
+      ownerId: env.DEFAULT_USER_ID,
+      contentHash,
+    }).lean();
+
     let perceptualDuplicate: { row: MediaAssetDoc; distance: number } | null = null;
 
-    if (kind === "reference_image") {
-      exactDuplicate = await MediaAsset.findOne({
-        ownerId: env.DEFAULT_USER_ID,
-        kind: "reference_image",
-        contentHash,
-      }).lean();
+    // Only run the perceptual sweep when SHA didn't already hit and we have
+    // a fingerprint to compare. The exact-match dialog is the right surface
+    // when both tiers would fire.
+    if (!exactDuplicate && perceptualHash) {
+      // Pull just { _id, perceptualHash } for every fingerprinted row in
+      // this owner's library (any kind), then Hamming-scan in memory.
+      // 64-bit hash + Brian Kernighan popcount — comfortably under 1 ms
+      // per 1000 rows.
+      const candidates = (await MediaAsset.find(
+        {
+          ownerId: env.DEFAULT_USER_ID,
+          perceptualHash: { $ne: null },
+        },
+        { _id: 1, perceptualHash: 1 },
+      ).lean()) as Array<{ _id: string; perceptualHash: string | null }>;
 
-      // Always compute the pHash so we can persist it on the new row even
-      // when it's not a duplicate. ~5 ms for a typical 2 MB image.
-      try {
-        const buf = await readFile(tmpPath);
-        perceptualHash = await perceptualHashFromBuffer(buf);
-      } catch (err) {
-        // Don't block the upload if sharp can't decode (very rare for files
-        // we already MIME-sniffed as JPEG/PNG, but defensive). The row just
-        // won't get a perceptual fingerprint — exact matching still works.
-        logger.warn({ err: errMsg(err) }, "Perceptual hash computation failed");
-      }
-
-      // Only run the perceptual sweep when SHA didn't already hit. The
-      // exact-match dialog is already the right thing to surface.
-      if (!exactDuplicate && perceptualHash) {
-        // Pull just { _id, perceptualHash } for every fingerprinted row in
-        // this owner's reference-image library, then Hamming-scan in memory.
-        // 64-bit hash + Brian Kernighan popcount — comfortably under 1 ms
-        // per 1000 rows.
-        const candidates = (await MediaAsset.find(
-          {
-            ownerId: env.DEFAULT_USER_ID,
-            kind: "reference_image",
-            perceptualHash: { $ne: null },
-          },
-          { _id: 1, perceptualHash: 1 },
-        ).lean()) as Array<{ _id: string; perceptualHash: string | null }>;
-
-        const closest = findClosestPerceptualMatch(
-          candidates,
-          perceptualHash,
-          PERCEPTUAL_DUPE_THRESHOLD,
-        );
-        if (closest) {
-          // Re-fetch the full doc so the dialog has filename / dimensions /
-          // createdAt to show.
-          const fullDoc = await MediaAsset.findById(closest.row._id).lean();
-          if (fullDoc) {
-            perceptualDuplicate = { row: fullDoc, distance: closest.distance };
-          }
+      const closest = findClosestPerceptualMatch(
+        candidates,
+        perceptualHash,
+        PERCEPTUAL_DUPE_THRESHOLD,
+      );
+      if (closest) {
+        // Re-fetch the full doc so the dialog has filename / dimensions /
+        // createdAt to show.
+        const fullDoc = await MediaAsset.findById(closest.row._id).lean();
+        if (fullDoc) {
+          perceptualDuplicate = { row: fullDoc, distance: closest.distance };
         }
       }
     }
@@ -321,12 +310,6 @@ async function probeMediaPath(path: string) {
 
 function sanitizeFilename(name: string): string {
   return name.replace(/[^\w.\- ]/g, "_").slice(0, 200);
-}
-
-async function fileSha256(path: string): Promise<string> {
-  const hash = createHash("sha256");
-  await pipeline(createReadStream(path), hash);
-  return hash.digest("hex");
 }
 
 function errMsg(e: unknown): string {

@@ -18,6 +18,7 @@ import { sniffMime, extForMime } from "@/lib/mime-sniff";
 import { getEnv } from "@/lib/env";
 import { signGid } from "@/lib/webhook-auth";
 import { generateCaptionPack, isLlmConfigured } from "@/lib/gemini";
+import { computeAssetHashes } from "@/lib/asset-hash";
 
 const POLL_PHASES: Array<{ untilSec: number; intervalMs: number }> = [
   { untilSec: 60, intervalMs: 5_000 },
@@ -261,6 +262,10 @@ async function finalizeSuccess(
     (imageGen.endpoint as KlingImageEndpoint) || "multi-image2image",
   );
 
+  // Hash on the way in so any future upload of this same generated image
+  // (e.g. user re-uploads it as a reference) gets flagged as a duplicate.
+  const hashes = await computeAssetHashes(buffer, finalContentType);
+
   const outputAsset = await MediaAsset.create({
     ownerId: imageGen.ownerId,
     kind: "generated_image",
@@ -268,6 +273,8 @@ async function finalizeSuccess(
     mimeType: finalContentType,
     sizeBytes: buffer.length,
     storageKey,
+    contentHash: hashes.contentHash,
+    perceptualHash: hashes.perceptualHash,
   });
 
   const won = await ImageGeneration.updateOne(

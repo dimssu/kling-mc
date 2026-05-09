@@ -1,11 +1,16 @@
 /**
- * One-shot backfill for reference_image hashes:
- *   - SHA-256 contentHash    → byte-exact dedupe
- *   - 64-bit dHash perceptualHash → "looks the same" dedupe
+ * One-shot backfill for MediaAsset hashes across the whole library:
+ *   - SHA-256 contentHash    → byte-exact dedupe (every kind)
+ *   - 64-bit dHash perceptualHash → "looks the same" dedupe (image kinds only —
+ *                                  sharp can't decode video)
  *
  * Streams each object from S3 once, computes both hashes in the same pass,
  * writes them back. After backfill, groups by each hash to surface clusters
  * that were already in the library.
+ *
+ * Covers every kind: reference_image, source_video, generated_image,
+ * generated_video. Run order: oldest first, so the report's "first row of a
+ * cluster" lines up with what showed up in the library first.
  *
  * Idempotent: skips rows whose hashes are already populated. Safe to re-run
  * after adding new hash types in the future.
@@ -14,14 +19,13 @@
  *      pnpm backfill:hashes --dry-run   # compute + report, don't write
  */
 
-import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import { GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { connectMongo } from "@/lib/mongo";
 import { MediaAsset } from "@/models";
 import { getEnv } from "@/lib/env";
 import { logger } from "@/lib/logger";
-import { perceptualHashFromBuffer } from "@/lib/perceptual-hash";
+import { computeAssetHashes, isImageMime } from "@/lib/asset-hash";
 import mongoose from "mongoose";
 
 const dryRun = process.argv.includes("--dry-run");
@@ -38,30 +42,34 @@ async function main() {
     },
   });
 
-  // Match rows missing EITHER hash. Lets us add new hash types later
-  // (e.g. blockhash, CLIP embeddings) and re-run without redoing the SHA pass
-  // for every row.
+  // Need contentHash (every kind) OR perceptualHash (only when applicable for
+  // mime). For videos, missing perceptualHash isn't fixable, so we exclude
+  // them from the "needs perceptual" branch — otherwise the script would loop
+  // forever flagging them as needing work it can't do.
   const filter = {
-    kind: "reference_image",
     $or: [
+      // Any kind missing the universal SHA hash.
       { contentHash: null },
       { contentHash: { $exists: false } },
-      { perceptualHash: null },
-      { perceptualHash: { $exists: false } },
+      // Image kinds missing the perceptual hash.
+      {
+        mimeType: /^image\//,
+        $or: [{ perceptualHash: null }, { perceptualHash: { $exists: false } }],
+      },
     ],
   };
 
   const total = await MediaAsset.countDocuments(filter);
 
   if (total === 0) {
-    console.log("✓ Nothing to backfill — every reference_image already has both hashes.");
+    console.log("✓ Nothing to backfill — every asset already has the hashes it can have.");
     await reportClusters();
     await mongoose.disconnect();
     return;
   }
 
   console.log(
-    `Backfilling hashes for ${total} reference_image row${total === 1 ? "" : "s"}${dryRun ? " (DRY RUN)" : ""}…`,
+    `Backfilling hashes for ${total} asset${total === 1 ? "" : "s"} across all kinds${dryRun ? " (DRY RUN)" : ""}…`,
   );
 
   let scanned = 0;
@@ -101,21 +109,13 @@ async function main() {
       }
       const buf = Buffer.concat(chunks);
 
+      // Single hash pass via the shared helper — same code paths as live
+      // uploads/worker outputs use, so output is consistent across surfaces.
+      const computed = await computeAssetHashes(buf, doc.mimeType ?? "");
       const update: { contentHash?: string; perceptualHash?: string } = {};
-      if (!doc.contentHash) {
-        update.contentHash = createHash("sha256").update(buf).digest("hex");
-      }
-      if (!doc.perceptualHash) {
-        try {
-          update.perceptualHash = await perceptualHashFromBuffer(buf);
-        } catch (err) {
-          // Some pre-existing rows might be unusual formats sharp can't read.
-          // Don't fail the whole row — just skip the perceptual hash.
-          logger.warn(
-            { id, err: err instanceof Error ? err.message : String(err) },
-            "Could not compute perceptualHash; skipping",
-          );
-        }
+      if (!doc.contentHash) update.contentHash = computed.contentHash;
+      if (!doc.perceptualHash && computed.perceptualHash) {
+        update.perceptualHash = computed.perceptualHash;
       }
 
       if (Object.keys(update).length === 0) {
@@ -130,9 +130,11 @@ async function main() {
       updated++;
       const idShort = id.slice(0, 8);
       const sha = (update.contentHash ?? doc.contentHash ?? "").slice(0, 12);
-      const ph = (update.perceptualHash ?? doc.perceptualHash ?? "(skipped)");
+      const ph =
+        (update.perceptualHash ?? doc.perceptualHash) ??
+        (isImageMime(doc.mimeType ?? "") ? "(failed)" : "(n/a video)");
       console.log(
-        `  ${dryRun ? "·" : "✓"} ${idShort}  sha:${sha}…  ph:${ph}  ${doc.filename}`,
+        `  ${dryRun ? "·" : "✓"} [${doc.kind}] ${idShort}  sha:${sha}…  ph:${ph}  ${doc.filename}`,
       );
     } catch (err) {
       failed++;
@@ -152,13 +154,20 @@ async function main() {
 }
 
 async function reportClusters() {
-  type Row = { id: string; filename: string; sizeBytes: number; createdAt: Date };
+  type Row = {
+    id: string;
+    filename: string;
+    sizeBytes: number;
+    createdAt: Date;
+    kind: string;
+  };
 
   // ── Tier 1: byte-identical clusters (exact SHA-256 collisions) ────────
+  // Cross-kind: a generated image and a re-uploaded copy of it should both
+  // show up in the same cluster.
   const exactClusters = (await MediaAsset.aggregate([
     {
       $match: {
-        kind: "reference_image",
         contentHash: { $ne: null, $exists: true },
       },
     },
@@ -172,6 +181,7 @@ async function reportClusters() {
             filename: "$filename",
             sizeBytes: "$sizeBytes",
             createdAt: "$createdAt",
+            kind: "$kind",
           },
         },
       },
@@ -201,7 +211,6 @@ async function reportClusters() {
   const phashClusters = (await MediaAsset.aggregate([
     {
       $match: {
-        kind: "reference_image",
         perceptualHash: { $ne: null, $exists: true },
       },
     },
@@ -218,6 +227,7 @@ async function reportClusters() {
             filename: "$filename",
             sizeBytes: "$sizeBytes",
             createdAt: "$createdAt",
+            kind: "$kind",
             contentHash: "$contentHash",
           },
         },
@@ -262,7 +272,13 @@ async function reportClusters() {
 
 function printCluster(
   hash: string,
-  rows: Array<{ id: string; filename: string; sizeBytes: number; createdAt: Date }>,
+  rows: Array<{
+    id: string;
+    filename: string;
+    sizeBytes: number;
+    createdAt: Date;
+    kind?: string;
+  }>,
 ) {
   console.log("");
   console.log(`  ${hash.slice(0, 16)}… — ${rows.length} copies`);
@@ -273,8 +289,9 @@ function printCluster(
   for (const r of sorted) {
     const kb = (r.sizeBytes / 1024).toFixed(1);
     const when = new Date(r.createdAt).toISOString().slice(0, 19).replace("T", " ");
+    const kindTag = r.kind ? `[${r.kind}] ` : "";
     console.log(
-      `    ${String(r.id).slice(0, 8)}  ${kb.padStart(7)} KB  ${when}  ${r.filename}`,
+      `    ${String(r.id).slice(0, 8)}  ${kb.padStart(7)} KB  ${when}  ${kindTag}${r.filename}`,
     );
   }
 }
