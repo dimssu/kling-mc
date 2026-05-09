@@ -38,6 +38,11 @@ type IngestBody = {
   prompt?: string | null;
   caption?: string | null;
   captionTags?: string[];
+  // Forward the dedupe fingerprints kling-mc has already computed so the
+  // gallery doesn't have to re-fetch + re-hash from S3. The gallery falls
+  // back to computing them itself when these are absent (older sync runs).
+  contentHash?: string;
+  perceptualHash?: string;
 };
 
 async function postIngest(body: IngestBody): Promise<{ ok: boolean; reason?: string }> {
@@ -91,6 +96,8 @@ async function main() {
       width: a.width ?? undefined,
       height: a.height ?? undefined,
       durationSec: a.durationSec ?? undefined,
+      contentHash: a.contentHash ?? undefined,
+      perceptualHash: a.perceptualHash ?? undefined,
     });
     console.log(`  · ${String(a._id)} (${a.kind})  ${r.ok ? "ok" : `failed: ${r.reason}`}`);
   }
@@ -118,6 +125,8 @@ async function main() {
       prompt: g.prompt,
       caption: g.caption,
       captionTags: g.captionTags ?? [],
+      contentHash: out.contentHash ?? undefined,
+      perceptualHash: out.perceptualHash ?? undefined,
     });
     console.log(`  · ${String(g._id)}  ${r.ok ? "ok" : `failed: ${r.reason}`}`);
   }
@@ -148,6 +157,8 @@ async function main() {
       prompt: g.prompt,
       caption: g.caption,
       captionTags: g.captionTags ?? [],
+      contentHash: out.contentHash ?? undefined,
+      perceptualHash: out.perceptualHash ?? undefined,
     });
     console.log(`  · ${String(g._id)}  ${r.ok ? "ok" : `failed: ${r.reason}`}`);
   }
@@ -183,6 +194,8 @@ async function main() {
         prompt: s.prompt,
         caption: c.caption ?? s.caption,
         captionTags: c.captionTags ?? s.captionTags ?? [],
+        contentHash: out.contentHash ?? undefined,
+        perceptualHash: out.perceptualHash ?? undefined,
       });
       console.log(
         `  · carousel ${String(c._id)} slot ${s.slotIndex}  ${r.ok ? "ok" : `failed: ${r.reason}`}`,
