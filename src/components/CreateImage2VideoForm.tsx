@@ -3,7 +3,7 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, Loader2, Sparkles } from "lucide-react";
+import { ArrowRight, Loader2, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { api, type MediaAsset } from "@/lib/api-client";
 import { formatUsd } from "@/lib/utils";
@@ -67,30 +67,39 @@ function formatUnits(n: number) {
   return Number.isInteger(n) ? `${n}` : n.toFixed(1);
 }
 
+// Standard starting prompt for single-image-to-video. Pre-filled on mount;
+// users edit it to taste. Tuned for a confident, flattering, environment-
+// engaged short clip — viral-leaning aesthetic. No end frame assumed.
+const DEFAULT_PROMPT = `An ultra-realistic, cinematic video of the exact same woman from the reference image. She is either talking softly and directly to the camera with a confident, flirty expression and gentle smile, or enjoying her surroundings — looking around, glancing toward the camera, soft laugh, slow head tilt — fully engaged with the environment she is in.
+
+Her body angle shifts gently to flatter her figure: subtle hip sway, slight shoulder roll, shoulders back, posture confident and magnetic. Hands move naturally — adjusting hair, smoothing the fabric of her outfit, fingers brushing along her waist as if showing off the look. The dress / outfit moves with her: fabric drapes, catches the light, settles naturally on her curves. The camera lingers on her silhouette so the dress and her body features read clearly without being explicit — confident, seductive, magazine-cover energy.
+
+Cinematic lighting flatters her skin and silhouette: golden-hour glow or soft warm rim light, shallow depth of field, subtle bokeh, natural realistic skin texture with faint imperfections. Smooth, lifelike motion with realistic physics — no jerks, no jumps, no scene cuts. Subtle dolly-in / push-in on a 50mm lens, very gentle parallax. Hair drifts in a light breeze. Background activity adds gentle motion blur without distracting.
+
+The energy is interactive, scroll-stopping, Instagram-reel style — designed to be liked and reshared. Confident, playful, slightly mysterious.
+
+IMPORTANT: Use the reference image as the exact starting frame. The woman must be 100% identical in face, identity, hair, body type, proportions, curves, and warm skin tone. Maintain perfect face and body consistency throughout the entire video. Animate only natural movement of the subject, her hair, her outfit, and ambient background elements. Keep the video smooth, realistic, and high-quality.`;
+
+const DEFAULT_NEGATIVE_PROMPT = `jitter, stutter, jerky motion, frame skips, morphing face, identity drift, face change, body change, deformed hands, extra fingers, missing fingers, melted features, plastic skin, oversharpened, oversaturated, harsh lighting, blown highlights, scene change, fast cuts, walking out of frame, multiple people, duplicate person, extra limbs, low quality, blurry, pixelated, watermark, text, logo, captions, ugly, distorted body`;
+
 export function CreateImage2VideoForm() {
   const router = useRouter();
   const qc = useQueryClient();
 
   const [startImage, setStartImage] = React.useState<MediaAsset | null>(null);
   const [tailImage, setTailImage] = React.useState<MediaAsset | null>(null);
-  const [prompt, setPrompt] = React.useState("");
-  const [negativePrompt, setNegativePrompt] = React.useState("");
+  const [prompt, setPrompt] = React.useState(DEFAULT_PROMPT);
+  const [negativePrompt, setNegativePrompt] = React.useState(DEFAULT_NEGATIVE_PROMPT);
   const [modelName, setModelName] = React.useState<Model>("kling-v2-6");
   const [mode, setMode] = React.useState<Mode>("std");
   const [duration, setDuration] = React.useState<Duration>("5");
   const [aspectRatio, setAspectRatio] = React.useState<AspectRatio>("16:9");
   const [cfgScale, setCfgScale] = React.useState<number | null>(null);
-  const [vibe, setVibe] = React.useState<string | null>(null);
 
-  const suggest = useMutation({
-    mutationFn: () => api.suggestVideoPrompt(),
-    onSuccess: (s) => {
-      setPrompt(s.prompt);
-      setNegativePrompt(s.negativePrompt);
-      setVibe(s.vibe || null);
-    },
-    onError: (err: Error) => toast.error(err.message),
-  });
+  const resetToDefault = () => {
+    setPrompt(DEFAULT_PROMPT);
+    setNegativePrompt(DEFAULT_NEGATIVE_PROMPT);
+  };
 
   const submit = useMutation({
     mutationFn: () => {
@@ -177,33 +186,22 @@ export function CreateImage2VideoForm() {
                   type="button"
                   variant="secondary"
                   size="sm"
-                  onClick={() => suggest.mutate()}
-                  disabled={suggest.isPending}
-                  title="AI-fill positive + negative prompts for a gentle single-image-to-video clip"
+                  onClick={resetToDefault}
+                  title="Restore the default starter prompt"
                 >
-                  {suggest.isPending ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Sparkles className="h-3.5 w-3.5" />
-                  )}
-                  Suggest
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  Reset to default
                 </Button>
               </div>
               <Textarea
                 id="prompt"
                 value={prompt}
-                onChange={(e) => {
-                  setPrompt(e.target.value);
-                  setVibe(null);
-                }}
-                placeholder="Click Suggest for an AI-written gentle motion prompt, or type your own."
+                onChange={(e) => setPrompt(e.target.value)}
+                placeholder="Describe the motion. The default starter is pre-filled — tweak as needed."
                 maxLength={2500}
-                rows={4}
+                rows={10}
               />
-              <div className="flex items-center justify-between gap-2 text-xs text-[var(--color-fg-subtle)]">
-                <span>{prompt.length}/2500</span>
-                {vibe && <span className="italic">vibe: {vibe}</span>}
-              </div>
+              <p className="text-xs text-[var(--color-fg-subtle)]">{prompt.length}/2500</p>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="neg-prompt">Negative prompt (optional)</Label>
@@ -211,9 +209,9 @@ export function CreateImage2VideoForm() {
                 id="neg-prompt"
                 value={negativePrompt}
                 onChange={(e) => setNegativePrompt(e.target.value)}
-                placeholder="e.g. blurry, low quality, deformed, jitter"
+                placeholder="Failure modes to suppress — pre-filled with the standard list."
                 maxLength={2500}
-                rows={2}
+                rows={4}
               />
             </div>
           </CardContent>

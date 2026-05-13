@@ -392,11 +392,6 @@ export const api = {
       method: "POST",
       body: JSON.stringify(input),
     }),
-  suggestVideoPrompt: () =>
-    request<{ prompt: string; negativePrompt: string; vibe: string }>(
-      `/api/video-generations/suggest-prompt`,
-      { method: "POST", body: JSON.stringify({}) },
-    ),
   listVideoGenerations: (params: { status?: string; favorite?: boolean } = {}) => {
     const sp = new URLSearchParams();
     if (params.status) sp.set("status", params.status);
