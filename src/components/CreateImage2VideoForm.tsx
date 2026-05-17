@@ -73,13 +73,19 @@ function audioSupported(model: Model, mode: Mode): boolean {
 }
 
 // Standard starting prompt for single-image-to-video. Pre-filled on mount;
-// users edit it to taste. Tuned for a confident, flattering, environment-
-// engaged short clip — viral-leaning aesthetic. No end frame assumed.
-const DEFAULT_PROMPT = `An ultra-realistic, cinematic video of the exact same curvy woman from the reference image. She is confidently seducing the camera, speaking softly with a sultry, flirty expression, occasional playful bite of the lip, and intense eye contact mixed with teasing glances away. She moves with magnetic confidence — slow sensual hip sways, gentle shoulder rolls, and a natural, hypnotic rhythm that accentuates her voluptuous figure.
-Her very revealing outfit features an extremely deep plunging neckline that prominently displays her large, full bust. As she moves, her chest has a natural, soft, alluring bounce and gentle jiggle with realistic physics, fabric subtly clinging and shifting over her curves. She runs her hands slowly along her waist and hips, lightly adjusting her dress, brushing her fingers across her cleavage teasingly while maintaining a confident, seductive energy.
-The camera lingers sensually on her silhouette with smooth, deliberate movement — subtle dolly-ins and gentle orbiting shots that celebrate her thick curvy body. Golden-hour lighting or soft warm cinematic lighting beautifully highlights her warm and deep cleavage. Shallow depth of field, creamy bokeh, ultra-realistic skin texture with subtle natural imperfections. Hair moves naturally in a light breeze. Smooth, lifelike motion with realistic fabric movement and body physics throughout.
-The overall mood is highly seductive, confident, and scroll-stopping — pure Instagram/TikTok influencer fantasy with magazine-cover sensuality.
-IMPORTANT: Use the reference image as the exact starting frame. The woman must be 100% identical in face, identity, hair, body type, proportions, thick curvy figure, large bust, and warm tone throughout the entire video. Maintain perfect face and body consistency. Animate only natural, realistic movements. Keep the video smooth, high-quality, and photorealistic.`;
+// users edit it to taste. Tuned for a confident, flirty, magnetic clip —
+// stays spicy without naming anatomy (Kling's risk-control filter rejects
+// explicit body-part wording, so we lean on outfit / motion / lighting /
+// camera language to carry the vibe).
+const DEFAULT_PROMPT = `An ultra-realistic, cinematic video of the exact same woman from the reference image. She is confidently engaging with the camera — speaking softly with a flirty, slightly mysterious smile, a playful lip bite, and magnetic eye contact mixed with teasing glances away. She moves with slow, deliberate confidence: subtle hip sway, gentle shoulder roll, a hypnotic rhythm that flatters her silhouette.
+
+She wears a form-fitting, figure-hugging outfit that drapes elegantly over her frame. As she moves, the fabric shifts naturally, catching the warm light along every line of her shape. She lightly adjusts the line of her dress, runs her fingertips slowly along her waist, smooths the fabric — confident, teasing gestures that read as effortlessly sensual.
+
+The camera glides along her silhouette with smooth, deliberate motion — slow cinematic dolly-ins and gentle orbiting shots that find her most flattering angles. Golden-hour or soft warm cinematic lighting sculpts her figure with creamy shallow depth of field, ultra-realistic skin texture with subtle natural imperfections, and a soft rim light along her jaw and shoulders. Hair drifts in a light breeze. Smooth, lifelike motion with realistic fabric physics throughout.
+
+The overall mood is confidently flirty, magnetic, scroll-stopping — magazine-cover sensuality, pure Instagram-reel fantasy, more about energy and presence than overt display.
+
+IMPORTANT: Use the reference image as the exact starting frame. The woman must be 100% identical in face, identity, hair, body type, proportions, figure, and skin tone throughout the entire video. Maintain perfect face and body consistency. Animate only natural, realistic movements. Keep the video smooth, high-quality, and photorealistic.`;
 
 const DEFAULT_NEGATIVE_PROMPT = `jitter, stutter, jerky motion, frame skips, morphing face, identity drift, face change, body change, deformed hands, extra fingers, missing fingers, melted features, plastic skin, oversharpened, oversaturated, harsh lighting, blown highlights, scene change, fast cuts, walking out of frame, multiple people, duplicate person, extra limbs, low quality, blurry, pixelated, watermark, text, logo, captions, ugly, distorted body`;
 
