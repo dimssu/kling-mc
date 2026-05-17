@@ -213,27 +213,47 @@ const createMultiImage2VideoSchema = z.object({
 });
 
 // Image2video: single subject image + optional end-frame, broad model menu.
-const createImage2VideoSchema = z.object({
-  endpoint: z.literal("image2video"),
-  imageId: z.string().min(1),
-  tailImageId: z.string().min(1).optional(),
-  prompt: z.string().max(2500).optional(),
-  negativePrompt: z.string().max(2500).optional(),
-  modelName: z.enum([
-    "kling-v1",
-    "kling-v1-5",
-    "kling-v1-6",
-    "kling-v2-1",
-    "kling-v2-5-turbo",
-    "kling-v2-6",
-  ]),
-  mode: z.enum(["std", "pro"]).default("std"),
-  duration: z.enum(["5", "10"]).default("5"),
-  aspectRatio: z.enum(["16:9", "9:16", "1:1"]).default("16:9"),
-  cfgScale: z.number().min(0).max(1).optional(),
-  watermarkEnabled: z.boolean().default(false),
-  captionPackEnabled: z.boolean().default(false),
-});
+const createImage2VideoSchema = z
+  .object({
+    endpoint: z.literal("image2video"),
+    imageId: z.string().min(1),
+    tailImageId: z.string().min(1).optional(),
+    prompt: z.string().max(2500).optional(),
+    negativePrompt: z.string().max(2500).optional(),
+    modelName: z.enum([
+      "kling-v1",
+      "kling-v1-5",
+      "kling-v1-6",
+      "kling-v2-1",
+      "kling-v2-5-turbo",
+      "kling-v2-6",
+    ]),
+    mode: z.enum(["std", "pro"]).default("std"),
+    duration: z.enum(["5", "10"]).default("5"),
+    aspectRatio: z.enum(["16:9", "9:16", "1:1"]).default("16:9"),
+    cfgScale: z.number().min(0).max(1).optional(),
+    // Native audio: V2.6 + Pro only, incompatible with end-frame.
+    enableAudio: z.boolean().default(false),
+    watermarkEnabled: z.boolean().default(false),
+    captionPackEnabled: z.boolean().default(false),
+  })
+  .superRefine((v, ctx) => {
+    if (!v.enableAudio) return;
+    if (v.modelName !== "kling-v2-6" || v.mode !== "pro") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["enableAudio"],
+        message: "Native audio is only supported on Kling V2.6 in Pro mode.",
+      });
+    }
+    if (v.tailImageId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["enableAudio"],
+        message: "Native audio cannot be combined with an end-frame image.",
+      });
+    }
+  });
 
 export const createVideoGenerationSchema = z.discriminatedUnion("endpoint", [
   createMultiImage2VideoSchema,

@@ -140,26 +140,54 @@ const IMAGE_2_VIDEO_UNITS_PER_5S: Record<
   "kling-v2-6": { std: 1.5, pro: 2.5 },
 };
 
+/**
+ * Native-audio surcharge multiplier. Per Kling's price table:
+ *   V2.6 Pro 5s no audio:    2.5 u / $0.35
+ *   V2.6 Pro 5s with audio:  5.0 u / $0.70   ← exactly 2× pro
+ * Only V2.6 Pro supports audio; every other (model, mode) combination
+ * ignores enableAudio entirely.
+ */
+function audioMultiplier(
+  model: KlingImage2VideoModel,
+  mode: KlingImage2VideoMode,
+  enableAudio: boolean,
+): number {
+  if (!enableAudio) return 1;
+  if (model === "kling-v2-6" && mode === "pro") return 2;
+  return 1;
+}
+
+export function audioSupported(
+  model: KlingImage2VideoModel,
+  mode: KlingImage2VideoMode,
+): boolean {
+  return model === "kling-v2-6" && mode === "pro";
+}
+
 export function estimateImage2VideoCostUsd(
   model: KlingImage2VideoModel,
   mode: KlingImage2VideoMode,
   durationSec: number,
+  enableAudio = false,
 ): number {
   const ratePer5s = IMAGE_2_VIDEO_RATE_USD_PER_5S[model]?.[mode];
   if (ratePer5s == null) return 0;
   const seconds = Math.max(1, Math.round(durationSec));
-  return Number(((seconds / 5) * ratePer5s).toFixed(4));
+  const mult = audioMultiplier(model, mode, enableAudio);
+  return Number(((seconds / 5) * ratePer5s * mult).toFixed(4));
 }
 
 export function estimateImage2VideoUnits(
   model: KlingImage2VideoModel,
   mode: KlingImage2VideoMode,
   durationSec: number,
+  enableAudio = false,
 ): number {
   const ratePer5s = IMAGE_2_VIDEO_UNITS_PER_5S[model]?.[mode];
   if (ratePer5s == null) return 0;
   const seconds = Math.max(1, Math.round(durationSec));
-  return Number(((seconds / 5) * ratePer5s).toFixed(2));
+  const mult = audioMultiplier(model, mode, enableAudio);
+  return Number(((seconds / 5) * ratePer5s * mult).toFixed(2));
 }
 
 export function image2VideoDeductionToUsd(
@@ -167,15 +195,16 @@ export function image2VideoDeductionToUsd(
   mode: KlingImage2VideoMode,
   finalUnitDeduction: string | null | undefined,
   fallbackDurationSec: number,
+  enableAudio = false,
 ): number | null {
-  // For image2video the units in the deduction map directly to a per-5s slot
-  // that matches our table — we compute USD = units × (USD/5s ÷ units/5s).
+  // The unit:USD ratio is constant per (model, mode) — audio scales both sides
+  // by the same multiplier, so the conversion factor doesn't shift.
   const usdPer5s = IMAGE_2_VIDEO_RATE_USD_PER_5S[model]?.[mode];
   const unitsPer5s = IMAGE_2_VIDEO_UNITS_PER_5S[model]?.[mode];
   if (usdPer5s == null || unitsPer5s == null) return null;
   const units = finalUnitDeduction == null ? NaN : Number(finalUnitDeduction);
   if (!Number.isFinite(units)) {
-    return estimateImage2VideoCostUsd(model, mode, fallbackDurationSec);
+    return estimateImage2VideoCostUsd(model, mode, fallbackDurationSec, enableAudio);
   }
   return Number((units * (usdPer5s / unitsPer5s)).toFixed(4));
 }

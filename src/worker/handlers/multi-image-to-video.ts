@@ -102,6 +102,7 @@ export async function handleMultiImageVideoJob(videoGenerationId: string): Promi
           prompt: videoGen.prompt ?? undefined,
           negativePrompt: videoGen.negativePrompt ?? undefined,
           cfgScale: videoGen.cfgScale ?? undefined,
+          enableAudio: !!videoGen.enableAudio,
           watermarkEnabled: videoGen.watermarkEnabled,
           externalTaskId: videoGen.externalTaskId,
         });
@@ -268,6 +269,7 @@ async function finalizeSuccess(
           videoGen.mode as KlingImage2VideoMode,
           result.finalUnitDeduction,
           fallbackDur,
+          !!videoGen.enableAudio,
         )
       : multiImage2VideoDeductionToUsd(
           videoGen.modelName as KlingMultiImage2VideoModel,

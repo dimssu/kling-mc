@@ -132,6 +132,9 @@ export default function VideoFromImagesDetailPage({ params }: Props) {
             <Detail k="Mode" v={g.mode} />
             <Detail k="Aspect ratio" v={g.aspectRatio} />
             {g.cfgScale != null && <Detail k="CFG scale" v={String(g.cfgScale)} />}
+            {g.endpoint === "image2video" && (
+              <Detail k="Audio" v={g.enableAudio ? "native (2×)" : "—"} />
+            )}
             <Detail k="Requested duration" v={`${g.duration} s`} />
             <Detail k="Output duration" v={formatDuration(g.outputAsset?.durationSec)} />
             <Detail k="Estimated cost" v={formatUsd(Number(g.estimatedCostUsd))} />

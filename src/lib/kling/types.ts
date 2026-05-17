@@ -116,12 +116,16 @@ export type Image2VideoInput = {
   aspectRatio: KlingVideoAspectRatio;
   imageUrl: string;
   /** Optional end-frame image. If supplied, the generated video transitions
-   *  from `imageUrl` (start frame) to `tailImageUrl` (end frame). */
+   *  from `imageUrl` (start frame) to `tailImageUrl` (end frame).
+   *  NOTE: incompatible with native audio generation on V2.6. */
   tailImageUrl?: string;
   prompt?: string;
   negativePrompt?: string;
   /** Optional 0..1 — controls how strictly the prompt is followed. */
   cfgScale?: number;
+  /** V2.6 + Pro only. Generates a natively-synced audio track with the video.
+   *  Doubles the Pro per-5s rate. Cannot be combined with `tailImageUrl`. */
+  enableAudio?: boolean;
   watermarkEnabled?: boolean;
   callbackUrl?: string;
   externalTaskId: string;

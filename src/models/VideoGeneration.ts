@@ -23,6 +23,8 @@ const VideoGenerationSchema = new Schema(
     referenceImageIds: { type: [String], default: [] },
     tailImageId: { type: String, default: null },
     cfgScale: { type: Number, default: null },
+    // V2.6 + Pro mode only. Doubles the Pro rate.
+    enableAudio: { type: Boolean, default: false },
     outputAssetId: {
       type: String,
       default: null,

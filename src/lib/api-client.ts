@@ -150,6 +150,7 @@ export type VideoGeneration = {
   referenceImageIds: string[];
   tailImageId: string | null;
   cfgScale: number | null;
+  enableAudio: boolean;
   outputAssetId: string | null;
   prompt: string | null;
   negativePrompt: string | null;
@@ -384,6 +385,8 @@ export const api = {
           duration?: "5" | "10";
           aspectRatio?: "16:9" | "9:16" | "1:1";
           cfgScale?: number;
+          /** V2.6 + Pro only. Doubles the per-5s rate. Cannot combine with tailImageId. */
+          enableAudio?: boolean;
           watermarkEnabled?: boolean;
           captionPackEnabled?: boolean;
         },

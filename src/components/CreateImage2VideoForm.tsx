@@ -67,18 +67,19 @@ function formatUnits(n: number) {
   return Number.isInteger(n) ? `${n}` : n.toFixed(1);
 }
 
+/** Kling supports native audio only on V2.6 + Pro. Doubles the rate. */
+function audioSupported(model: Model, mode: Mode): boolean {
+  return model === "kling-v2-6" && mode === "pro";
+}
+
 // Standard starting prompt for single-image-to-video. Pre-filled on mount;
 // users edit it to taste. Tuned for a confident, flattering, environment-
 // engaged short clip — viral-leaning aesthetic. No end frame assumed.
-const DEFAULT_PROMPT = `An ultra-realistic, cinematic video of the exact same woman from the reference image. She is either talking softly and directly to the camera with a confident, flirty expression and gentle smile, or enjoying her surroundings — looking around, glancing toward the camera, soft laugh, slow head tilt — fully engaged with the environment she is in.
-
-Her body angle shifts gently to flatter her figure: subtle hip sway, slight shoulder roll, shoulders back, posture confident and magnetic. Hands move naturally — adjusting hair, smoothing the fabric of her outfit, fingers brushing along her waist as if showing off the look. The dress / outfit moves with her: fabric drapes, catches the light, settles naturally on her curves. The camera lingers on her silhouette so the dress and her body features read clearly without being explicit — confident, seductive, magazine-cover energy.
-
-Cinematic lighting flatters her skin and silhouette: golden-hour glow or soft warm rim light, shallow depth of field, subtle bokeh, natural realistic skin texture with faint imperfections. Smooth, lifelike motion with realistic physics — no jerks, no jumps, no scene cuts. Subtle dolly-in / push-in on a 50mm lens, very gentle parallax. Hair drifts in a light breeze. Background activity adds gentle motion blur without distracting.
-
-The energy is interactive, scroll-stopping, Instagram-reel style — designed to be liked and reshared. Confident, playful, slightly mysterious.
-
-IMPORTANT: Use the reference image as the exact starting frame. The woman must be 100% identical in face, identity, hair, body type, proportions, curves, and warm skin tone. Maintain perfect face and body consistency throughout the entire video. Animate only natural movement of the subject, her hair, her outfit, and ambient background elements. Keep the video smooth, realistic, and high-quality.`;
+const DEFAULT_PROMPT = `An ultra-realistic, cinematic video of the exact same curvy woman from the reference image. She is confidently seducing the camera, speaking softly with a sultry, flirty expression, occasional playful bite of the lip, and intense eye contact mixed with teasing glances away. She moves with magnetic confidence — slow sensual hip sways, gentle shoulder rolls, and a natural, hypnotic rhythm that accentuates her voluptuous figure.
+Her very revealing outfit features an extremely deep plunging neckline that prominently displays her large, full bust. As she moves, her chest has a natural, soft, alluring bounce and gentle jiggle with realistic physics, fabric subtly clinging and shifting over her curves. She runs her hands slowly along her waist and hips, lightly adjusting her dress, brushing her fingers across her cleavage teasingly while maintaining a confident, seductive energy.
+The camera lingers sensually on her silhouette with smooth, deliberate movement — subtle dolly-ins and gentle orbiting shots that celebrate her thick curvy body. Golden-hour lighting or soft warm cinematic lighting beautifully highlights her warm and deep cleavage. Shallow depth of field, creamy bokeh, ultra-realistic skin texture with subtle natural imperfections. Hair moves naturally in a light breeze. Smooth, lifelike motion with realistic fabric movement and body physics throughout.
+The overall mood is highly seductive, confident, and scroll-stopping — pure Instagram/TikTok influencer fantasy with magazine-cover sensuality.
+IMPORTANT: Use the reference image as the exact starting frame. The woman must be 100% identical in face, identity, hair, body type, proportions, thick curvy figure, large bust, and warm tone throughout the entire video. Maintain perfect face and body consistency. Animate only natural, realistic movements. Keep the video smooth, high-quality, and photorealistic.`;
 
 const DEFAULT_NEGATIVE_PROMPT = `jitter, stutter, jerky motion, frame skips, morphing face, identity drift, face change, body change, deformed hands, extra fingers, missing fingers, melted features, plastic skin, oversharpened, oversaturated, harsh lighting, blown highlights, scene change, fast cuts, walking out of frame, multiple people, duplicate person, extra limbs, low quality, blurry, pixelated, watermark, text, logo, captions, ugly, distorted body`;
 
@@ -95,6 +96,14 @@ export function CreateImage2VideoForm() {
   const [duration, setDuration] = React.useState<Duration>("5");
   const [aspectRatio, setAspectRatio] = React.useState<AspectRatio>("16:9");
   const [cfgScale, setCfgScale] = React.useState<number | null>(null);
+  const [enableAudio, setEnableAudio] = React.useState(false);
+
+  const canUseAudio = audioSupported(modelName, mode) && !tailImage;
+  // Auto-clear the audio toggle whenever the model/mode/tail combo makes it
+  // unavailable, so we don't silently submit a stale `true`.
+  React.useEffect(() => {
+    if (enableAudio && !canUseAudio) setEnableAudio(false);
+  }, [canUseAudio, enableAudio]);
 
   const resetToDefault = () => {
     setPrompt(DEFAULT_PROMPT);
@@ -115,6 +124,7 @@ export function CreateImage2VideoForm() {
         duration,
         aspectRatio,
         cfgScale: cfgScale ?? undefined,
+        enableAudio: enableAudio && canUseAudio ? true : undefined,
       });
     },
     onSuccess: ({ videoGeneration }) => {
@@ -126,8 +136,10 @@ export function CreateImage2VideoForm() {
     onError: (err: Error) => toast.error(err.message),
   });
 
-  const usdRate = PRICING_PER_5S[modelName][mode];
-  const unitsRate = UNITS_PER_5S[modelName][mode];
+  const audioOn = enableAudio && canUseAudio;
+  const audioMult = audioOn ? 2 : 1;
+  const usdRate = PRICING_PER_5S[modelName][mode] * audioMult;
+  const unitsRate = UNITS_PER_5S[modelName][mode] * audioMult;
   const cost = usdRate * multiplier(duration);
   const units = unitsRate * multiplier(duration);
   const ready = !!startImage && !submit.isPending;
@@ -283,6 +295,36 @@ export function CreateImage2VideoForm() {
                 Higher = follows prompt more strictly.
               </p>
             </div>
+            <label
+              className={`flex items-start gap-2 text-sm sm:col-span-3 ${
+                canUseAudio ? "" : "opacity-60"
+              }`}
+              title={
+                canUseAudio
+                  ? "Kling V2.6 Pro will generate a natively-synced audio track. Doubles the cost."
+                  : tailImage
+                    ? "Audio cannot be combined with an end-frame image."
+                    : "Native audio is only supported on Kling V2.6 in Pro mode."
+              }
+            >
+              <input
+                type="checkbox"
+                checked={enableAudio && canUseAudio}
+                disabled={!canUseAudio}
+                onChange={(e) => setEnableAudio(e.target.checked)}
+                className="mt-0.5 h-4 w-4 accent-[var(--color-accent)]"
+              />
+              <span>
+                Generate audio (V2.6 + Pro)
+                <span className="ml-1 text-xs text-[var(--color-fg-subtle)]">
+                  {canUseAudio
+                    ? "doubles the rate · adds a synced native audio track"
+                    : tailImage
+                      ? "unavailable — remove the end frame to enable"
+                      : "switch to V2.6 + Pro to enable"}
+                </span>
+              </span>
+            </label>
           </CardContent>
         </Card>
       </div>
@@ -311,6 +353,7 @@ export function CreateImage2VideoForm() {
               <Row k="Duration" v={`${duration} s`} />
               <Row k="Aspect" v={aspectRatio} />
               <Row k="End frame" v={tailImage ? "yes" : "—"} />
+              <Row k="Audio" v={audioOn ? "yes (2×)" : "—"} />
             </dl>
             {!startImage && (
               <p className="rounded-[var(--radius-md)] border border-[var(--color-warning)] bg-[color-mix(in_oklab,var(--color-warning)_15%,transparent)] px-3 py-2 text-xs text-[var(--color-warning)]">

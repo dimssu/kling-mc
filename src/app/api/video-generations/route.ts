@@ -128,6 +128,7 @@ export async function POST(req: Request) {
           input.modelName as KlingImage2VideoModel,
           input.mode as KlingImage2VideoMode,
           durationSec,
+          input.enableAudio,
         )
       : estimateMultiImage2VideoCostUsd(
           input.modelName as KlingMultiImage2VideoModel,
@@ -153,6 +154,8 @@ export async function POST(req: Request) {
     tailImageId:
       input.endpoint === "image2video" ? (input.tailImageId ?? null) : null,
     cfgScale: input.endpoint === "image2video" ? (input.cfgScale ?? null) : null,
+    enableAudio:
+      input.endpoint === "image2video" ? !!input.enableAudio : false,
     prompt: input.prompt ?? null,
     negativePrompt: input.negativePrompt ?? null,
     modelName: input.modelName,

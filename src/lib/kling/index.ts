@@ -14,6 +14,7 @@ export {
   estimateImage2VideoUnits,
   image2VideoDeductionToUsd,
   image2VideoPricingTable,
+  audioSupported,
 } from "./pricing";
 export type { KlingMode, KlingModel, KlingImageModel } from "./pricing";
 export { KlingApiError, isRetryable, isUserFacing } from "./errors";

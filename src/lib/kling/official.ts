@@ -253,6 +253,7 @@ class OfficialKlingProvider implements KlingProvider {
     if (input.prompt) body.prompt = input.prompt;
     if (input.negativePrompt) body.negative_prompt = input.negativePrompt;
     if (input.cfgScale != null) body.cfg_scale = input.cfgScale;
+    if (input.enableAudio) body.enable_audio = true;
     if (input.watermarkEnabled) body.watermark_info = { enabled: true };
     if (input.callbackUrl) body.callback_url = input.callbackUrl;
 
