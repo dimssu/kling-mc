@@ -253,7 +253,13 @@ class OfficialKlingProvider implements KlingProvider {
     if (input.prompt) body.prompt = input.prompt;
     if (input.negativePrompt) body.negative_prompt = input.negativePrompt;
     if (input.cfgScale != null) body.cfg_scale = input.cfgScale;
-    if (input.enableAudio) body.enable_audio = true;
+    // Kling's official field is `generate_audio` (defaults to false on the
+    // /v1/videos/image2video endpoint). Several wrapper APIs rename this
+    // to `enable_audio`/`sound`/etc. on their own surface — those are NOT
+    // Kling's wire field. Verified via fal.ai and aimlapi schemas, plus
+    // an empirical run where `enable_audio: true` produced a 2.5-unit
+    // (no-audio-rate) billing instead of 5 units.
+    if (input.enableAudio) body.generate_audio = true;
     if (input.watermarkEnabled) body.watermark_info = { enabled: true };
     if (input.callbackUrl) body.callback_url = input.callbackUrl;
 
