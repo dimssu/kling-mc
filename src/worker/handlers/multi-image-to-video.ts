@@ -161,13 +161,24 @@ async function pollUntilTerminal(
           ? await provider.getImage2VideoTask(providerTaskId)
           : await provider.getMultiImage2VideoTask(providerTaskId);
     } catch (err) {
-      if (err instanceof KlingApiError && err.retryable) {
-        log.warn({ err: err.message, code: err.code }, "Retryable poll error, sleeping");
-        await sleep(phase.intervalMs);
-        continue;
+      // Only a Kling API error with retryable=false is a true hard failure.
+      // Everything else (network blips, DNS hiccups, undici `fetch failed`,
+      // timeouts, AbortError) gets retried — the 20-minute hard timeout
+      // still bounds the loop, and if Kling itself marked the task failed
+      // a later poll will surface the real `task_status_msg`. Previously a
+      // single transient blip overwrote the real Kling reason with a
+      // generic "fetch failed" in the DB.
+      const isHardKlingError = err instanceof KlingApiError && !err.retryable;
+      if (isHardKlingError) {
+        await markFailed(videoGenerationId, err);
+        return;
       }
-      await markFailed(videoGenerationId, err);
-      return;
+      log.warn(
+        { err: err instanceof Error ? err.message : String(err) },
+        "Transient poll error, sleeping",
+      );
+      await sleep(phase.intervalMs);
+      continue;
     }
 
     if (result.status === "succeed") {
@@ -192,6 +203,40 @@ async function pollUntilTerminal(
     }
 
     await sleep(phase.intervalMs);
+  }
+
+  // Last-ditch query — if Kling did finalize in the gap between our last
+  // poll and the hard timeout, capture the real status_msg instead of a
+  // generic "timeout" message.
+  try {
+    const final =
+      endpoint === "image2video"
+        ? await provider.getImage2VideoTask(providerTaskId)
+        : await provider.getMultiImage2VideoTask(providerTaskId);
+    if (final.status === "succeed") {
+      await finalizeSuccess(videoGenerationId, final, log);
+      return;
+    }
+    if (final.status === "failed") {
+      await VideoGeneration.updateOne(
+        { _id: videoGenerationId },
+        {
+          $set: {
+            status: "failed",
+            errorMessage: final.statusMessage ?? "Generation failed",
+            completedAt: new Date(),
+            rawProviderPayload: final.rawPayload ?? null,
+          },
+        },
+      );
+      log.warn({ statusMessage: final.statusMessage }, "Kling reported failure at timeout");
+      return;
+    }
+  } catch (err) {
+    log.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      "Final Kling query failed — recording polling timeout",
+    );
   }
 
   await VideoGeneration.updateOne(

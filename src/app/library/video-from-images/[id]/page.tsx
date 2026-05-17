@@ -73,8 +73,23 @@ export default function VideoFromImagesDetailPage({ params }: Props) {
               className="h-full w-full"
             />
           ) : g.status === "failed" ? (
-            <div className="grid h-full w-full place-items-center text-sm text-[var(--color-danger)]">
-              {g.errorMessage || "Generation failed"}
+            <div className="grid h-full w-full place-items-center p-6 text-center">
+              <div className="space-y-2 max-w-md">
+                <p className="text-sm font-semibold uppercase tracking-wide text-[var(--color-danger)]">
+                  Generation failed
+                </p>
+                <p className="text-sm text-[var(--color-fg)]">
+                  {g.errorMessage || "Kling did not return a result."}
+                </p>
+                {g.errorMessage?.toLowerCase().includes("risk control") && (
+                  <p className="text-xs text-[var(--color-fg-muted)]">
+                    Kling&apos;s content-moderation filter blocked the prompt
+                    or reference image. Try less explicit wording — describe
+                    posture, outfit, mood, and lighting instead of anatomy.
+                    You weren&apos;t charged for this run.
+                  </p>
+                )}
+              </div>
             </div>
           ) : (
             <div className="grid h-full w-full place-items-center gap-2 text-sm text-[var(--color-fg-muted)]">
